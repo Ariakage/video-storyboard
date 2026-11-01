@@ -15,13 +15,13 @@
     "multimodal",
     "asr"
   ],
-  "homepage": "https://github.com/Ariakage/dsh-video-storyboard#readme",
+  "homepage": "https://github.com/Ariakage/video-storyboard#readme",
   "bugs": {
-    "url": "https://github.com/Ariakage/dsh-video-storyboard/issues"
+    "url": "https://github.com/Ariakage/video-storyboard/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Ariakage/dsh-video-storyboard.git"
+    "url": "git+https://github.com/Ariakage/video-storyboard.git"
   },
   "author": "SAOS-3624",
   "license": "Apache-2.0",

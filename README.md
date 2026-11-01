@@ -1,6 +1,6 @@
 # video-storyboard
 
-[![test](https://github.com/Ariakage/dsh-video-storyboard/actions/workflows/test.yml/badge.svg)](https://github.com/Ariakage/dsh-video-storyboard/actions/workflows/test.yml)
+[![test](https://github.com/Ariakage/video-storyboard/actions/workflows/test.yml/badge.svg)](https://github.com/Ariakage/video-storyboard/actions/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](package.json)
 
@@ -16,8 +16,8 @@ Claude Code、Codex、Cursor、任何能跑 shell 并读取图片的 agent 都�
 ## 30 秒上手
 
 ```bash
-git clone https://github.com/Ariakage/dsh-video-storyboard.git
-cd dsh-video-storyboard
+git clone https://github.com/Ariakage/video-storyboard.git
+cd video-storyboard
 node scripts/install-skill.mjs        # 装到 ~/.claude/skills/video-storyboard
 node bin/doctor.mjs                   # 检查 ffmpeg / yt-dlp / ASR
 

@@ -35,8 +35,8 @@ winget install yt-dlp        # Windows
 ## 3. 安装 Skill
 
 ```bash
-git clone https://github.com/Ariakage/dsh-video-storyboard.git
-cd dsh-video-storyboard
+git clone https://github.com/Ariakage/video-storyboard.git
+cd video-storyboard
 node scripts/install-skill.mjs
 ```
 
