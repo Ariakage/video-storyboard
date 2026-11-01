@@ -18,6 +18,7 @@ import { DEFAULT_FFMPEG, DEFAULT_FFPROBE, mediaCandidates } from '../src/storybo
 import { canTranscribe, describeAsrTarget, resolveAsrConfig } from '../src/storyboard/asr.js';
 import { mediaDir } from '../src/storyboard/media-store.js';
 import { discoverYtdlp } from '../src/storyboard/ytdlp.js';
+import { ASR_CONFIG_FILE, configPath } from '../src/storyboard/config.js';
 import { execFile } from 'node:child_process';
 
 const ok = (m) => console.log(`  ✅ ${m}`);
@@ -54,7 +55,7 @@ for (const [name, bin] of [['ffmpeg', DEFAULT_FFMPEG], ['ffprobe', DEFAULT_FFPRO
     bad(`${name} 跑不起来（试过：${bin}）`);
     console.log(mediaCandidates(name).map((c) => `       - ${c.path}`).join('\n'));
     console.log('     → 装一个：winget install Gyan.FFmpeg  /  brew install ffmpeg');
-    console.log('       已有的话设 DSH_FFMPEG_PATH 指到可执行文件。装完**重启 DSH**。');
+    console.log('       已有的话设 VIDEO_STORYBOARD_FFMPEG_PATH 指到可执行文件，然后重开终端。');
     hardFail += 1;
   }
 }
@@ -66,7 +67,7 @@ const tool = await discoverYtdlp().catch((e) => ({ error: e }));
 if (tool?.error || !tool?.bin) {
   warn('没找到 yt-dlp —— 本地文件照常用，贴 B 站/YouTube 链接会失败');
   console.log('     → pip install --user -U yt-dlp   （或 winget install yt-dlp）');
-  console.log('       装完设 DSH_YTDLP_PATH 指到 yt-dlp.exe，然后**重启 DSH**');
+  console.log('       装完设 VIDEO_STORYBOARD_YTDLP 指到 yt-dlp 可执行文件，然后重开终端');
 } else {
   const r = await run(tool.bin, ['--version']);
   ok(`yt-dlp: ${tool.bin} (${(r.stdout || '?').trim()})`);
@@ -94,14 +95,14 @@ if (canTranscribe(cfg)) {
   else {
     warn(`连不上 ${probeUrl}（3 秒超时）`);
     console.log('     → 本机服务没起来？先启动它（例如 D:\\asr-local\\start-asr.cmd）');
-    console.log('       远端服务：检查 ~/.dsh/asr.json 里的 baseUrl');
+    console.log(`       远端服务：检查 ${configPath(ASR_CONFIG_FILE)} 里的 baseUrl`);
   }
 } else {
   warn('没有可用的 ASR：视频**能出图**，但清单里没有台词（"听不见声音"就是这个）');
   console.log('     → 二选一：');
-  console.log('       ① 本机服务（免费、不联网）：装 funasr 后跑起来，在 ~/.dsh/asr.json 写');
+  console.log(`       ① 本机服务（免费、不联网）：装 funasr 后跑起来，在 ${configPath(ASR_CONFIG_FILE)} 写`);
   console.log('          { "baseUrl": "http://127.0.0.1:8000/v1" }');
-  console.log('       ② 云端（要 key）：在 ~/.dsh/asr.json 写');
+  console.log(`       ② 云端（要 key）：在 ${configPath(ASR_CONFIG_FILE)} 写`);
   console.log('          { "key": "sk-...", "baseUrl": "https://api.siliconflow.cn/v1",');
   console.log('            "model": "FunAudioLLM/SenseVoiceSmall" }');
   console.log('       改完不用重启（0.5.0 起按文件 mtime 热加载）');
@@ -119,7 +120,7 @@ try {
   ok(`可写：${dir}`);
 } catch (e) {
   bad(`不可写：${dir}（${e.message}）`);
-  console.log('     → 设 DSH_VIDEO_MEDIA_DIR 换一个目录');
+  console.log('     → 设 VIDEO_STORYBOARD_MEDIA_DIR 换一个目录');
   hardFail += 1;
 }
 
@@ -134,7 +135,7 @@ console.log('  · 完整教程：docs/入门-五分钟.zh.md   常见问题：do
 
 console.log('');
 if (hardFail > 0) {
-  console.log(`有 ${hardFail} 项没配好，按上面的箭头补完再重启 DSH。`);
+  console.log(`有 ${hardFail} 项没配好，按上面的箭头补完再重试。`);
   process.exit(1);
 }
 console.log('全部就绪。');

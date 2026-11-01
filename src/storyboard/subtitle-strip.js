@@ -16,7 +16,8 @@
  */
 
 import { mkdtemp, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+
+import { readEnv } from './config.js';import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -88,7 +89,7 @@ export async function resolveBand({ input, ffmpegPath, from, to, workDir, overri
       if (hit.ok) return { band: hit.band, source: 'detected' };
       // 检测不到不致命（很多片子字幕在顶部、或者根本没有），但原因要能看到：
       // 以前这里静默退回默认带，连"脚本路径错"都看不出来（#39）。
-      if (process.env.DSH_OCR_DEBUG) console.error('[subs] band detect:', hit.kind, hit.message);
+      if (readEnv('ocrDebug', process.env)) console.error('[subs] band detect:', hit.kind, hit.message);
     }
   } catch {
     /* 检测是可选的：装不上 python / rapidocr 时不该让整条路失败 */
@@ -188,7 +189,7 @@ export async function buildSubtitleStrip({
     //     分不清是换字幕还是人物走过。要分清得有精确的字幕框，而那要靠 OCR 检测，
     //     没装 rapidocr 的机器上就是默认那条 26% 高的带子。
     //
-    // 所以：调用方有字幕轨或 video_locate 的真实时间码 → 传 times，一条对应一句，省一半条数；
+    // 所以：调用方有字幕轨或 locate 的真实时间码 → 传 times，一条对应一句，省一半条数；
     // 没有 → 均匀抽样。宁可多几条空白，也不拿一个不可靠的时刻表去"精确"对齐。
     const plan = Array.isArray(times) && times.length > 0
       ? times.map(Number).filter((t) => Number.isFinite(t) && t >= from && t <= end)

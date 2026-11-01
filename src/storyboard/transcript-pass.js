@@ -23,6 +23,7 @@ import {
   extractSubtitleTrack, filterSuspectSegments, resolveAsrConfig, transcribeLong,
 } from './asr.js';
 import { ensureAsr } from './asr-lifecycle.js';
+import { readEnv } from './config.js';
 import { cacheKey, withCache } from './cache.js';
 import { resolveInput } from './fetch.js';
 import { countTextInSilence } from './format.js';
@@ -140,7 +141,7 @@ export async function resolveTranscript({
           // 传 `spawnImpl: spawn` 等于每跑一次就 ReferenceError 一次，被下面的 catch 吞成
           // "asr-failed · spawn is not defined" —— 转写于是永远是空的。默认值在 asr-lifecycle 里。
           asrLife = await ensureAsr({ baseUrl: asrCfg.baseUrl, config: asrCfg })
-            .catch((e) => { if (process.env.DSH_ASR_DEBUG) console.error('[asr-lifecycle]', e.message); return null; });
+            .catch((e) => { if (readEnv('asrDebug', process.env)) console.error('[asr-lifecycle]', e.message); return null; });
         }
         // 记下 ASR 花了几秒：清单要报"这次转写花了 3 分 12 秒 / 命中缓存 0 秒"。
         // 只报 CPU 秒数没有意义（用户原话：成本该报成"图数×token + ASR 秒数"）。

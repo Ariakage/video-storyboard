@@ -14,7 +14,7 @@ import {
   BACKGROUND, blit, drawBadge, drawBadgePlain, drawPadding, fillRect,
 } from '../src/storyboard/sheet.js';
 
-const FF = process.env.DSH_FFMPEG_PATH || 'ffmpeg';
+const FF = (process.env.VIDEO_STORYBOARD_FFMPEG_PATH || process.env.DSH_FFMPEG_PATH) || 'ffmpeg';
 const OUT = join(process.cwd(), 'out-packed');
 const N = Number(process.argv[2] || 10);
 const DIR = process.argv[3] || 'D:/deepseek/3-Life/20.2_关键帧';

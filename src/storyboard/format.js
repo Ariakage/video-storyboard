@@ -143,7 +143,7 @@ export function countTextInSilence(segments, silences, ratio = 0.6) {
 }
 
 /**
- * video_probe 的文本：容器信息 + 一个"该怎么读"的建议。
+ * probe 命令的文本：容器信息 + 一个"该怎么读"的建议。
  * 不扫描、不取帧，只花 ffprobe 的时间（几毫秒）。
  */
 export async function formatProbe(info) {
@@ -172,12 +172,12 @@ export async function formatProbe(info) {
     const estFrames = 96 * estSheets;
     lines.push(`How to read ${mins.toFixed(0)} min: **window by window, not one overview.**`);
     lines.push(`  • SEQUENCE (no spoilers, like watching it) — default for films / episodes / any story:`);
-    lines.push(`      video_storyboard({ input, from: 0, segment: ${segSec} })`);
+    lines.push(`      storyboard command: --from 0 --segment ${segSec}`);
     lines.push(`    ${totalSeg} windows. Every result ends with "segment k/${totalSeg} · x% watched · ` +
       `y min left · next: from=…"; pass that from back with the same segment. ` +
       `One image (~${perImage} vision tokens) per window; ASR is transcribed once per window, cached after that.`);
     lines.push(`  • STRUCTURE (spoils the ending) — **only to identify what this is, or when spoilers are allowed**:`);
-    lines.push(`      video_storyboard({ input, maxFrames: ${estFrames} }) → up to ${estFrames} frames ` +
+    lines.push(`      storyboard command: --max-frames ${estFrames} → up to ${estFrames} frames ` +
       `at ~${px.w}×${px.h} for the 1/3 tier, ~${perImage * estSheets} vision tokens.`);
     lines.push('    The tier is decided by cut density, not by you: fast-cutting stretches get 1/8-size ' +
       'cells (100×56 on a 800-wide canvas), long takes get 1/1. Lower `strategy` to "saver"/"frugal" ' +
@@ -186,7 +186,7 @@ export async function formatProbe(info) {
     lines.push(`under a minute (${info.duration.toFixed(0)}s): one call is enough.`);
   } else {
     lines.push(`Short (${mins.toFixed(0)} min): one call is enough. Following a story rather than ` +
-      'analysing structure? Use `from` + `segment` (e.g. segment:120) so later scenes are not on screen early.');
+      'analysing structure? Use `--from` + `--segment` (e.g. --segment 120) so later scenes are not on screen early.');
   }
   const seen = await describeMemory(info).catch(() => null);
   if (seen) lines.push(`seen before: ${seen}`);
@@ -227,12 +227,12 @@ export function formatRemoteProbe(remote) {
     const segSec = 300;
     lines.push(`note: ${Math.round(dur / 60)} min long — read it in windows, not one pass. ` +
       `For narrative content the default is SEQUENCE: ` +
-      `video_storyboard({ input, from: 0, segment: ${segSec} }) — ` +
+      `storyboard command with --from 0 --segment ${segSec} — ` +
       `${Math.ceil(dur / segSec)} windows, and every result tells you the next from. ` +
-      'A one-shot overview (cells:16 over the whole file) spoils the ending and makes each cell unreadable.');
+      'A one-shot overview (a large --max-frames over the whole file) spoils the ending and makes each cell unreadable.');
   }
-  lines.push('nothing was downloaded yet. video_storyboard with this link downloads a low-res copy ' +
-    'once (fast, and cached afterwards); video_zoom then reads the original stream at ' +
+  lines.push('nothing was downloaded yet. The storyboard command with this link downloads a low-res copy ' +
+    'once (fast, and cached afterwards); zoom then reads the original stream at ' +
     `${remote.maxHeight ?? 1080}p for close-ups.`);
   return lines.join('\n');
 }
@@ -345,9 +345,9 @@ export function readabilityAdvice(plan) {
   return `!! the smallest cells are ${w}x${h} — that is "${readability}", colour blocks rather than ` +
     `content. The 1/${tier} tier exists because that stretch cuts fast (many short shots), so each ` +
     'frame there is a real shot but only that wide. Fix it one of three ways: ' +
-    'strategy:"quality" (every frame one tier bigger — same frames, more images, ~384 tokens each), ' +
-    'strategy:"balanced" instead of "saver"/"frugal" (the cheap modes shrink everything one or three ' +
-    'tiers on purpose), or video_zoom on the 1-2 frames you actually need (one short window, big cells). ' +
+    '--strategy full (every frame one tier bigger — same frames, more images, ~384 tokens each), ' +
+    '--strategy standard instead of compact/skim/brief (the cheaper modes shrink everything one tier ' +
+    'on purpose), or zoom on the 1-2 frames you actually need (one short window, big cells). ' +
     'Raising budget will not help: the canvas is capped at 800x800 by the vision API.';
 }
 
@@ -555,7 +555,7 @@ export function formatManifest(result, {
     lines.push(`source: ${s.url} (auth=${s.auth}${s.cached ? ', cached' : ''}); ` +
       `scanned at ${s.scanActual ?? s.scanHeight}p` +
       (s.maxAvailable ? `, source max ${s.maxAvailable}p` : '') +
-      (s.zoomTarget ? `; video_zoom reads ${s.zoomTarget}p from the original stream` : '') + '.');
+      (s.zoomTarget ? `; zoom reads ${s.zoomTarget}p from the original stream` : '') + '.');
     if (Array.isArray(s.degraded) && s.degraded.length > 0) {
       const cap = s.maxAvailable ? `${s.maxAvailable}p` : 'a lower tier';
       lines.push(`source limit: this video tops out at ${cap} (${s.degraded.join(', ')}) — ` +
@@ -574,7 +574,7 @@ export function formatManifest(result, {
       lines.push(`!! NEEDS LOGIN — this site hides ${what} from anonymous requests ` +
         `(auth=${s.auth}). Do NOT guess the dialogue from burned-in text or scenes.`);
       lines.push('   Ask the user for cookies before trusting any transcript: export cookies.txt from the ' +
-        'browser and point "cookies" in ~/.dsh/video.json at it (README, "needs a signed-in video"). ' +
+        'browser and point "cookies" in the video.json config at it (README, "needs a signed-in video"). ' +
         'If the user cannot provide one, say so explicitly rather than presenting a partial transcript ' +
         'as complete.');
     }
@@ -624,7 +624,7 @@ export function formatManifest(result, {
   if (result.plan?.bursts?.length) {
     const top = [...result.plan.bursts].sort((a, b) => (b.shots ?? 0) - (a.shots ?? 0)).slice(0, 3);
     lines.push(`fast cuts: ${top.map((b) => `${tc(b.from)}-${tc(b.to)} (${b.shots} shots)`).join(', ')}` +
-      ' — video_zoom({ from, to, cells: 6, minGap: 0.4 }) splits these into single shots.');
+      ' — zoom with --from/--to splits these into single shots (cuts closer than the scan gap merge).');
   }
 
   // 切点不多时直接列出精确时间：条带只能读个 ±2~4 秒的大概，而这一行是 0.01 秒的准确值。
@@ -683,7 +683,7 @@ export function formatManifest(result, {
         'misheard — cross-check against on-screen text before quoting them.');
     }
     if (result.transcript.termsFixed > 0) {
-      lines.push(`${result.transcript.termsFixed} term(s) corrected by the local dictionary (DSH_ASR_TERMS / asr.json "terms")`);
+      lines.push(`${result.transcript.termsFixed} term(s) corrected by the local dictionary (VIDEO_STORYBOARD_ASR_TERMS / asr.json "terms")`);
     }
     if (result.transcript.textInSilence > 0) {
       lines.push(`${result.transcript.textInSilence} line(s) of text sit inside a detected silence — ` +
@@ -749,7 +749,7 @@ export function formatManifest(result, {
     lines.push(result.source?.audioMissing
       ? result.source.audioMissingReason === 'unmerged-dash'
         ? 'no audio in this copy: yt-dlp downloaded the DASH audio as a separate file instead of ' +
-          'merging it (ffmpeg was not available to yt-dlp). Install ffmpeg or set DSH_FFMPEG_PATH, ' +
+          'merging it (ffmpeg was not available to yt-dlp). Install ffmpeg or set VIDEO_STORYBOARD_FFMPEG_PATH, ' +
           'then retry — cookies will not fix this.'
         : 'no audio in this copy: the downloaded track is silent while the source has audio. ' +
           'Pass cookies, or download locally, to get loudness and transcript.'
@@ -765,7 +765,7 @@ export function formatManifest(result, {
   lines.push('</storyboard>');
   // 追问时不必重新出图 —— 这张图就在上下文里，按格号引用即可（每省一次就是 384 token）。
   // 两行共约 100 字符，换掉一次重读的 384 token —— 只要追问一次就赚回来。
-  lines.push('sheet already in context: cite cells by number; video_zoom only for a narrower window.');
+  lines.push('sheet already in context: cite cells by number; zoom only for a narrower window.');
   lines.push('per-cell times for verification: <name>.evidence.json');
   return lines.join('\n');
 }

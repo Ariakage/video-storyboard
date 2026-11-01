@@ -15,7 +15,7 @@ import {
 } from '../src/storyboard/sheet.js';
 import { DEFAULT_FFMPEG } from '../src/storyboard/probe.js';
 
-const FF = process.env.DSH_FFMPEG_PATH || DEFAULT_FFMPEG;
+const FF = (process.env.VIDEO_STORYBOARD_FFMPEG_PATH || process.env.DSH_FFMPEG_PATH) || DEFAULT_FFMPEG;
 const OUT = join(process.cwd(), 'out-packed');
 const CLIP = join(OUT, '_test.mp4');
 

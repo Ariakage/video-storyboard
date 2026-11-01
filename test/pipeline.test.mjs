@@ -1,13 +1,12 @@
 /**
  * pipeline.test.mjs — 端到端：真 ffmpeg 现造片子 → runStoryboard → 断言产物。
- * 顺带验证 apply() 的接线（注册一次、名字正确），不依赖真实 DSH 宿主。
+ * 工具接线层的 e2e 覆盖已迁到 test/cli.test.mjs（直接跑 bin/ 下的命令）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -161,78 +160,6 @@ test('e2e: cache=false 时不读写缓存', async (t) => {
 
 test('e2e: 非法 pick 立刻抛错（不跑 ffmpeg）', async () => {
   await assert.rejects(() => runStoryboard({ input: 'x.mp4', pick: 'blurry' }), RangeError);
-});
-
-test('插件接线: apply() 注册一个叫 video_storyboard 的工具', async (t) => {
-  const host = join(homedir(), '.dsh/profiles/node_modules/@deepseek-ai/dsh-tools/lib/index.js');
-  // CI 上没有 DSH 宿主包，apply() 会抛 "cannot resolve" —— 那是有意为之，跳过即可
-  if (!existsSync(host)) return t.skip('no local DSH install (@deepseek-ai/dsh-tools)');
-  if (!process.env.DSH_TOOLS_PATH) process.env.DSH_TOOLS_PATH = host;
-  const { apply, name: pluginName, inject } = await import('../src/index.js');
-  assert.equal(pluginName, 'dsh-video-storyboard');
-  // **不能声明 attachments**：cordis 的 inject 是硬依赖，服务缺失时 apply 永不被调用，
-  // 插件就永远停在"加载中"（用户侧表现：装完插件 DSH 卡死）。见 src/index.js。
-  assert.deepEqual(inject, ['tools']);
-
-  const registered = [];
-  let disposed = 0;
-  const saved = [];
-  const ctx = {
-    tools: { register: (tool) => { registered.push(tool); return () => { disposed += 1; }; } },
-    attachments: {
-      saveImage: async (input) => {
-        saved.push(input);
-        return { attachmentId: 'stub', mediaType: input.mediaType, bytes: input.data.length };
-      },
-    },
-  };
-  try {
-    const disposer = await apply(ctx);
-    assert.deepEqual(registered.map((t) => t.name).sort(),
-      ['video_locate', 'video_probe', 'video_storyboard', 'video_subtitles', 'video_zoom']);
-    assert.equal(typeof disposer, 'function', 'apply 必须返回 disposer');
-    disposer();
-    assert.equal(disposed, 5, '五个工具都应被释放');
-    // 真跑一次 execute，确保交给附件的是真 PNG（这一条能抓住线上那个 malformed 事故）
-    const dir2 = await mkdtemp(join(tmpdir(), 'dsh-exec-'));
-    t.after(() => rm(dir2, { recursive: true, force: true }));
-    const fixture = await makeFixture(dir2);
-    const storyboard = registered.find((t) => t.name === 'video_storyboard');
-    const value = await storyboard.execute({ input: fixture, maxFrames: 4 });
-    assert.equal(saved.length, 1, '应提交一张图');
-    assert.equal(saved[0].mediaType, 'image/png');
-    assert.equal(saved[0].data.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', '必须是 PNG 魔数');
-    assert.match(value.text, /<storyboard[\s\S]*cell 1/);
-    assert.equal(value.images.length, 1);
-
-    // locate 也要真跑一次：这条测试就是 issue 里那个 ReferenceError 的回归守卫
-    // （0.4.1 漏了 `import ... from './locate.js'`，工具一调就崩，而测试当时没覆盖到）
-    const locate = registered.find((t) => t.name === 'video_locate');
-    const lv = await locate.execute({ input: fixture, query: '测试' });
-    assert.equal(typeof lv.text, 'string');
-    assert.ok(lv.text.length > 10, 'locate 必须返回一段可读文本');
-
-    // zoom 也要真跑一次：窗口收窄、单图、格数默认 6
-    saved.length = 0;
-    const zoom = registered.find((t) => t.name === 'video_zoom');
-    const z = await zoom.execute({ input: fixture, from: 1, to: 3 });
-    assert.equal(saved.length, 1);
-    assert.equal(saved[0].data.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-    assert.match(z.text, /window="1\.00-3\.00"/);
-
-    // probe 也真跑一次：不取帧、不花钱，只读容器头
-    const probe = registered.find((t) => t.name === 'video_probe');
-    const p = await probe.execute({ input: fixture });
-    assert.match(p.text, /<video[^>]*duration="6\.0/);
-    // 这个 fixture 只有视频流，正好覆盖"没音轨"的分支
-    assert.match(p.text, /audio="no"/);
-    assert.match(p.text, /no audio track/);
-  } catch (error) {
-    if (/Cannot find package|Cannot find module/.test(String(error))) {
-      return t.skip('host @deepseek-ai/dsh-tools not resolvable here');
-    }
-    throw error;
-  }
 });
 
 /* ---------------------------------------------------------------- 批量复用扫描 */
@@ -412,7 +339,7 @@ test('formatRemoteProbe: 说明"什么还没下载"和下一步', async () => {
   });
   assert.match(text, /available: 360p, 480p, 720p, 1080p \(max 1080p\)/);
   assert.match(text, /nothing was downloaded yet/);
-  assert.match(text, /video_zoom then reads the original stream at 1080p/);
+  assert.match(text, /zoom then reads the original stream at 1080p/);
 });
 
 test('formatRemoteProbe: 匿名时明确警告分辨率不保证', async () => {
@@ -610,22 +537,4 @@ test('refineCutsByWindow: 逐帧动画（一拍二）的周期性帧差不算剪
     stats: real, fps: fps25, coarseCuts: [{ t: 1, score: 46 }], winStart: 0, winDur: 8, winSec: 8,
   });
   assert.ok(r2.cuts.length >= 20, `4 帧一剪应该数出来，实得 ${r2.cuts.length}`);
-});
-
-test('插件接线: 宿主没有 attachments 服务时，apply 仍然成功、工具照样注册', async (t) => {
-  const host = join(homedir(), '.dsh/profiles/node_modules/@deepseek-ai/dsh-tools/lib/index.js');
-  if (!existsSync(host)) return t.skip('no local DSH install (@deepseek-ai/dsh-tools)');
-  if (!process.env.DSH_TOOLS_PATH) process.env.DSH_TOOLS_PATH = host;
-  const { apply } = await import('../src/index.js');
-
-  const registered = [];
-  // 故意不给 attachments —— 这是"宿主版本偏旧 / 该 bundle 没启用"时的真实形状。
-  // 以前这里会永远卡在 cordis 的依赖等待里，现在必须照常注册、只是图片走降级。
-  const ctx = {
-    tools: { register: (tool) => { registered.push(tool); return () => {}; } },
-  };
-  const dispose = await apply(ctx);
-  assert.equal(typeof dispose, 'function');
-  assert.ok(registered.length >= 5, `应该注册 5 个工具，实得 ${registered.length}`);
-  assert.ok(registered.some((t) => t.name === 'video_storyboard'));
 });

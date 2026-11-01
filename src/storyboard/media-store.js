@@ -12,6 +12,8 @@ import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { ENV, readEnv } from './config.js';
+
 /** 文件在不在、可不可读。**一行一个坑**：裸 access() 抛异常，用 try 包住才是判断而不是报错。 */
 export async function fileExists(path) {
   try {
@@ -22,18 +24,18 @@ export async function fileExists(path) {
   }
 }
 
-export const MEDIA_ENV = 'DSH_VIDEO_MEDIA_DIR';
-export const MEDIA_MAX_MB_ENV = 'DSH_VIDEO_MEDIA_MAX_MB';
+export const MEDIA_ENV = ENV.mediaDir[0];
+export const MEDIA_MAX_MB_ENV = ENV.mediaMaxMb[0];
 export const DEFAULT_MEDIA_MAX_MB = 300;
 
 /* ------------------------------------------------------------------ 媒体缓存 */
 
 export function mediaDir(env = process.env) {
-  return env[MEDIA_ENV] || join(tmpdir(), 'dsh-video-storyboard', 'media');
+  return readEnv('mediaDir', env) || join(tmpdir(), 'video-storyboard', 'media');
 }
 
 export function mediaMaxBytes(env = process.env) {
-  const mb = Number(env[MEDIA_MAX_MB_ENV]);
+  const mb = Number(readEnv('mediaMaxMb', env));
   return (Number.isFinite(mb) && mb > 0 ? mb : DEFAULT_MEDIA_MAX_MB) * 1024 * 1024;
 }
 

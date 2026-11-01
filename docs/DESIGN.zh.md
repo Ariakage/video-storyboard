@@ -1,6 +1,10 @@
-# dsh-video-storyboard · 中文长版说明
+# 设计长文 · video-storyboard
 
-> **速览版在 [README.md](README.md)**（三分钟读完）。这份是长版：设计取舍、实测基线、和其他插件的对比。
+> ⚠️ **历史长文（写于 0.5.x 插件时期）**：本文是设计取舍与实测记录，安装/调用方式已被
+> [SKILL.md](../SKILL.md) 与 [README.md](../README.md) 取代；参数以 0.6.0 为准（`cells` 等旧参数已删除）。
+> 保留它是因为里面的基线数字和取舍过程仍然有价值。
+
+> 速览版在 [README.md](../README.md)；本文是长版：设计取舍、实测基线、和其他插件的对比。
 
 [![test](https://github.com/SAOS-3624/dsh-video-storyboard/actions/workflows/test.yml/badge.svg)](https://github.com/SAOS-3624/dsh-video-storyboard/actions/workflows/test.yml)
 

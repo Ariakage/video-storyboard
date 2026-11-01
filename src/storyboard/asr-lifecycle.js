@@ -5,7 +5,7 @@
  * 这台 16 GB 的机器上，它和 Premiere / 大项目同时存在就会把提交上限撞穿，
  * 表现为 dwm 崩 0xc00001ad、桌面黑屏、整机卡死。
  *
- * 插件**不会**自己去拉起别人的服务 —— 除非用户在 `~/.dsh/asr.json` 里显式写了 `manage.start`。
+ * 插件**不会**自己去拉起别人的服务 —— 除非用户在 asr.json（默认 `~/.video-storyboard/asr.json`）里显式写了 `manage.start`。
  * 一旦写了，就按下面的契约办：
  *
  *   1. 转录前：端点活着 → 什么都不做（owned=false，不碰别人的进程）

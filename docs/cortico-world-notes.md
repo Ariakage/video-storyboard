@@ -1,3 +1,6 @@
+> ⚠️ **历史集成笔记（DSH 插件时期）**：现在本仓库是一个通用 Skill，主入口是 `SKILL.md` 与 `bin/`；
+> 下面的适配层讨论只对仍在维护旧插件的下游有意义。
+
 # 接 Coopanion（Cortico World）的笔记
 
 2026-10-28 写过一版完整的适配层，本地验证通过后**删掉了**。这里留下契约和结论——
@@ -74,11 +77,11 @@ blobs → mime=image/png, 701496 bytes, Buffer=true, PNG 魔数校验通过
 
 ## 依赖主包的方式（关键：不复制代码）
 
-`dsh-video-storyboard` 的 `exports` 已经暴露了子路径，所以适配层可以直接：
+`video-storyboard-skill` 的 `exports` 已经暴露了子路径，所以适配层可以直接：
 
 ```js
-import { runStoryboard, formatManifest, DETAIL_CHARS } from 'dsh-video-storyboard/pipeline';
-import { DEFAULT_FFMPEG } from 'dsh-video-storyboard/probe';
+import { runStoryboard, formatManifest, DETAIL_CHARS } from 'video-storyboard-skill/pipeline';
+import { DEFAULT_FFMPEG } from 'video-storyboard-skill/probe';
 ```
 
 主包**零改动**，也不会有"复制出去就分叉"的问题——主包修了什么，这边跟着变。

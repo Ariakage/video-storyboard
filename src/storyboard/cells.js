@@ -1,5 +1,5 @@
 /**
- * cells.js — 记住上一次分镜里每一格对应的**绝对时间**，供 `video_zoom({ cellId })` 直接寻址。
+ * cells.js — 记住上一次分镜里每一格对应的**绝对时间**，供 `zoom --cell-id` 直接寻址。
  *
  * 为什么需要：清单里每格都有 `t_start/t_end`，但模型想细看某一格时得自己抄数字，
  * 换窗口、改参数之后就抄错。cellId 让它"引用一次就闭环"。
@@ -32,7 +32,7 @@ export function cellsPath(env = process.env) {
  * @param {Array<{i:number, from:number, to:number}>} cells 绝对时间（秒）
  *
  * **为什么要支持数组**：远程视频的 `input` 是 URL，但下载后 `input` 会变成临时文件路径。
- * `video_zoom({cellId})` 那边可能拿 URL 来查，也可能拿本地路径 —— 只存一个 key 就必然有一边查不到。
+ * `zoom --cell-id` 那边可能拿 URL 来查，也可能拿本地路径 —— 只存一个 key 就必然有一边查不到。
  * 这个坑踩过：cell 表写进去了，用 URL 查三次全是 NOT FOUND。
  */
 export async function saveCells(path, cells, { env = process.env, at = Date.now() } = {}) {

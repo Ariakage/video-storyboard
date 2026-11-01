@@ -6,7 +6,7 @@
 
 ## 1. 目录长什么样
 
-> **本插件不带 ASR 服务端。** 下面这棵树是"本机自建一个 OpenAI 兼容服务"时的**一种**参考布局
+> **本 skill 不带 ASR 服务端。** 下面这棵树是"本机自建一个 OpenAI 兼容服务"时的**一种**参考布局
 > （我们自己在用的那种），`server-sherpa.py` 和 `start-asr.cmd` 是**你自己写的服务**，
 > 仓库里没有这两个文件 —— 服务端只要满足 §7 的契约就行，用现成的 OpenAI 兼容服务也可以（见 §7.1）。
 > 契约的完整说明在 [`asr-contract.md`](./asr-contract.md)（尤其是"segments 的时间相对上传音频"和
@@ -26,7 +26,7 @@ D:/asr/                          # 语音服务目录（任意位置，建议独
 └─ start-asr.cmd                 # 手动启动用（CRLF + 纯 ASCII）★ 你自己写
 ```
 
-## 2. `~/.dsh/asr.json`（语音）
+## 2. `~/.video-storyboard/asr.json`（语音）
 
 ```json
 {
@@ -49,7 +49,7 @@ D:/asr/                          # 语音服务目录（任意位置，建议独
 | `manage.waitMs` | 等它 ready 的上限。模型首次加载约 2 秒，60 秒很宽松 |
 | `hotwords` | **不建议写在全局**，见 §4 |
 
-## 3. `~/.dsh/video.json`（视频）
+## 3. `~/.video-storyboard/video.json`（视频）
 
 ```json
 {
@@ -68,7 +68,7 @@ D:/asr/                          # 语音服务目录（任意位置，建议独
 ## 4. 热词：按片子传，别写全局
 
 ```js
-video_storyboard({ input: "lecture.mp4", hotwords: "位错 滑移 柏氏矢量 晶界" })
+node bin/storyboard.mjs lecture.mp4 --detail high   # 热词写在 asr.json 的 hotwords 里
 ```
 
 全局 `hotwords` 只在"我天天看同一类片"时才值得写。**学科不对时它是负偏置**——
@@ -79,7 +79,7 @@ video_storyboard({ input: "lecture.mp4", hotwords: "位错 滑移 柏氏矢量 �
 | 项目 | 数值 |
 |---|---|
 | sherpa 模型加载 | **1.9 s** |
-| 插件侧冷启动（含进程创建） | **4–5 s** |
+| 工具侧冷启动（含进程创建） | **4–5 s** |
 | FunASR 冷启动（对比） | 30 s |
 | 45 秒音频转写 | 2.1 s |
 | 21 分钟录屏，整片 | **89 s**（扫描 82 / 转写被扫描完全吞掉 / 取帧 3.4 / 音频 2.7） |
@@ -95,7 +95,7 @@ video_storyboard({ input: "lecture.mp4", hotwords: "位错 滑移 柏氏矢量 �
 // ② 直接写脚本：自动补解释器（按同目录 .venv 找）
 "start": "D:/asr/server-sherpa.py"
 
-// ③ 批处理：留给手动双击，插件用会闪一个控制台窗口
+// ③ 批处理：留给手动双击，工具调用会闪一个控制台窗口
 "start": "D:/asr/start-asr.cmd"
 ```
 
@@ -108,7 +108,7 @@ video_storyboard({ input: "lecture.mp4", hotwords: "位错 滑移 柏氏矢量 �
 GET  /health                    → 200（拿不到就读 /v1/models）
 POST /v1/audio/transcriptions   → OpenAI 兼容，返回 verbose_json
                                  { text, segments:[{start,end,text}] }
-POST /shutdown                  → 返回后退出（不支持也行，插件会退回杀进程）
+POST /shutdown                  → 返回后退出（不支持也行，工具会退回杀进程）
 ```
 
 ### 7.1 服务端从哪来（三选一）
@@ -116,7 +116,7 @@ POST /shutdown                  → 返回后退出（不支持也行，插件�
 | 做法 | 适合 | 说明 |
 |---|---|---|
 | 现成的 OpenAI 兼容服务 | 大多数人 | 例如自建 funasr-server / speaches，或任何支持 `/v1/audio/transcriptions` 的服务。`baseUrl` 指过去即可，**本机地址不需要 key** |
-| 云端 API | 不想在本机跑模型 | 配 `DSH_ASR_KEY`；中文效果取决于模型 |
+| 云端 API | 不想在本机跑模型 | 配 `VIDEO_STORYBOARD_ASR_KEY`（旧名 `DSH_ASR_KEY`）；中文效果取决于模型 |
 | 自己写（我们就是这种） | 要完全离线、要 VAD+标点自己控 | 按 §7 的契约 + [`asr-contract.md`](./asr-contract.md) 实现，约 300 行 |
 
 写服务端时两个坑（都是社区反馈的真实错误）：
@@ -135,7 +135,7 @@ POST /shutdown                  → 返回后退出（不支持也行，插件�
 | `asr-failed · ECONNREFUSED` | 服务没起来 | 看 `manage.start` 是否写成了 `.py`（现已自动补解释器）、端口是否被占 |
 | 转写空白但视频有说话 | 热词/模型不对，或确实没人说话 | 先看清单是 `no-key` / `asr-empty` / `asr-failed`：`no-key` = 没跑（配 key 或本机服务），`asr-empty` = 跑了但没听到话，`asr-failed` = 请求失败 |
 | `HTTP Error 567` | B 站风控（常伴"要登录"） | 导出 cookies.txt，或直接喂本地文件 |
-| 说有 1080p 却只给 480p | cookies 过期会**降低**可见清晰度 | 插件会自动改探匿名并提示你重导 |
+| 说有 1080p 却只给 480p | cookies 过期会**降低**可见清晰度 | 工具会自动改探匿名并提示你重导 |
 | 清单写 `!! NEEDS LOGIN` | 站点把字幕藏在登录后面 | 给 cookies；给不了就明说，不要从画面猜台词 |
 
 ---
@@ -193,7 +193,7 @@ git push origin v0.4.3          # 网络不好时也会失败
 
 ```
 1. 测试 + check-syntax 全绿
-2. 版本号（package.json / dsh.plugin.json）
+2. 版本号（package.json / SKILL.md 同一次提交）
 3. CHANGELOG 整理（别留 Unreleased）
 4. 提交 → 推到 GitHub（必要时走 API，记住 §9.2）
 5. 打 tag（用远端 SHA）

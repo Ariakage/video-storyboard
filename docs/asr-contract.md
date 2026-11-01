@@ -10,7 +10,7 @@ POST {DSH_ASR_BASE_URL}/audio/transcriptions
 Authorization: Bearer {DSH_ASR_KEY}
 Content-Type: multipart/form-data
 
-file            = 16 kHz mono WAV (extracted by this plugin via ffmpeg)
+file            = 16 kHz mono WAV (extracted by this tool via ffmpeg)
 model           = whatever you configured (e.g. FunAudioLLM/SenseVoiceSmall)
 response_format = verbose_json
 language        = zh (override with DSH_ASR_LANG)
@@ -77,7 +77,7 @@ in the tool output**, never silently discarded.
 # 1) is the server alive? (use a direct fetch — curl may go through a proxy and lie with 502)
 node -e "fetch('http://127.0.0.1:8000/health').then(r=>console.log(r.status))"
 
-# 2) does the plugin's client work? (no server needed — spins a fake one)
+# 2) does the tool's client work? (no server needed — spins a fake one)
 node --test test/asr-local.test.mjs
 
 # 3) end to end on 12 seconds of audio

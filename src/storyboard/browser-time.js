@@ -28,34 +28,38 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { VIDEO_CONFIG_FILE, configHome, configPath, readEnv } from './config.js';
+
 /**
- * 从 `~/.dsh/video.json` 读端口配置。
+ * 从配置目录下的 video.json 读端口配置（默认 `~/.video-storyboard/video.json`）。
  *
- * 为什么要文件而不是只认环境变量：DSH 桌面版的宿主进程 env 由启动器决定，
- * 用户 `setx` 之后插件仍然读不到（这个坑今天已经踩过一次）。文件不依赖 env 传播。
+ * 为什么要文件而不是只认环境变量：桌面应用的宿主进程 env 由启动器决定，
+ * 用户 `setx` 之后工具仍然读不到（这个坑今天已经踩过一次）。文件不依赖 env 传播。
  *
  *   { "browserPort": 9333 }
  */
-/** `~/.dsh/video.json` 里的 launchBrowser（默认关：不要替用户随便开程序） */
-export function configuredLaunch(env = process.env) {
-  const home = env.DSH_HOME || join(env.USERPROFILE || env.HOME || homedir(), '.dsh');
+function readVideoConfig(env) {
   try {
-    const cfg = JSON.parse(readFileSync(join(home, 'video.json'), 'utf8'));
-    return cfg?.launchBrowser === true;
+    return JSON.parse(readFileSync(configPath(VIDEO_CONFIG_FILE, env), 'utf8'));
   } catch {
-    return false;
+    return null;
   }
 }
 
+/** video.json 里的 launchBrowser（默认关：不要替用户随便开程序） */
+export function configuredLaunch(env = process.env) {
+  const cfg = readVideoConfig(env);
+  return cfg?.launchBrowser === true;
+}
+
 export function configuredPort(env = process.env) {
-  const home = env.DSH_HOME || join(env.USERPROFILE || env.HOME || homedir(), '.dsh');
-  try {
-    const cfg = JSON.parse(readFileSync(join(home, 'video.json'), 'utf8'));
-    const n = Number(cfg?.browserPort);
+  const cfg = readVideoConfig(env);
+  if (cfg) {
+    const n = Number(cfg.browserPort);
     if (Number.isFinite(n) && n > 0) return n;
-    if (cfg?.browserPort === false || cfg?.browser === false) return null;
-  } catch { /* 没有配置文件就是没开 */ }
-  const fromEnv = Number(env.DSH_BROWSER_DEBUG_PORT);
+    if (cfg.browserPort === false || cfg.browser === false) return null;
+  }
+  const fromEnv = Number(readEnv('browserPort', env));
   return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : null;
 }
 
@@ -331,7 +335,7 @@ export function launchBrowser({
   const edge = exe
     ?? EDGE_CANDIDATES.find((q) => { try { return existsSync(q); } catch { return false; } })
     ?? EDGE_CANDIDATES[0];
-  const profile = profileDir ?? join(homedir(), '.dsh', 'edge-watch');
+  const profile = profileDir ?? join(configHome(env), 'edge-watch');
   if (!existsSync(edge)) return { ok: false, reason: 'edge-not-found' };
   mkdirSync(profile, { recursive: true });
   // **清掉上次的会话**：用独立 profile 冷启动时，Edge 会自动恢复上次开的标签页，
@@ -493,7 +497,7 @@ export function cookiesToNetscape(cookies) {
 export async function writeBrowserCookiesFile({ port = DEFAULT_PORT, dir = null } = {}) {
   const cookies = await readBrowserCookies({ port });
   if (!cookies || cookies.length === 0) return null;
-  const target = dir ?? join(homedir(), '.dsh', 'bili-cookies-from-browser.txt');
+  const target = dir ?? configPath('bili-cookies-from-browser.txt', env);
   try {
     mkdirSync(join(target, '..'), { recursive: true });
     writeFileSync(target, cookiesToNetscape(cookies), 'utf8');

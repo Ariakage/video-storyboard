@@ -11,14 +11,12 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { ASR_CONFIG_FILE, configPath, readEnv } from './config.js';
 
-/** 从 ~/.dsh/asr.json 里挖出 ASR 用的那个 python（有就当作候选） */
+/** 从 asr.json 里挖出 ASR 用的那个 python（有就当作候选） */
 function asrPython(env = process.env) {
-  const home = env.DSH_HOME || join(env.USERPROFILE || env.HOME || homedir(), '.dsh');
   try {
-    const cfg = JSON.parse(readFileSync(join(home, 'asr.json'), 'utf8'));
+    const cfg = JSON.parse(readFileSync(configPath(ASR_CONFIG_FILE, env), 'utf8'));
     const start = Array.isArray(cfg?.manage?.start) ? cfg.manage.start[0] : cfg?.manage?.start;
     if (typeof start === 'string' && /python(\.exe)?$/i.test(start) && existsSync(start)) return start;
   } catch { /* 没有配置就算了 */ }
@@ -33,9 +31,9 @@ export function pythonCandidates({ config = {}, env = process.env } = {}) {
   };
   push(config?.ocr?.python);          // 老配置项，保留兼容
   push(config?.python);
-  push(env.DSH_PYTHON);
-  push(env.DSH_OCR_PYTHON);
-  push(env.DSH_WATCH_PYTHON);
+  push(readEnv('python', env));
+  push(readEnv('ocrPython', env));
+  push(readEnv('watchPython', env));
   // 用户已经为 ASR 配过一个 venv python —— 说明那台机器上"本地 Python 能力"装在这里的可能性最高。
   // 复用它的好处：不需要再教用户多配一个环境变量。
   push(asrPython(env));
@@ -69,7 +67,7 @@ export function findPython(module, { config = {}, env = process.env, timeoutMs =
     return Promise.resolve(hit.cmd);
   }
   const candidates = pythonCandidates({ config, env });
-  const debug = process.env.DSH_OCR_DEBUG;
+  const debug = readEnv('ocrDebug', process.env);
   return new Promise((resolve) => {
     let i = 0;
     const tried = [];

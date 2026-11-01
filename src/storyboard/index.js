@@ -2,8 +2,8 @@
  * storyboard/index.js — 这一侧对外的**公开 API**。
  *
  * 谁在用：
- *   1. `src/index.js` —— 注册四个工具（走 `./register.js`，不从这里走）
- *   2. 拆出去的 watch 插件 —— 通过 `dsh-video-storyboard/storyboard` 引用
+ *   1. `bin/` 下的命令行 —— 直接 import 具体模块，不从这里走
+ *   2. 外部调用方 —— 通过包子路径 `video-storyboard-skill/storyboard` 引用
  *
  * 这里只导出"别人真的需要"的东西。缓存目录、ffmpeg 路径、ASR 生命周期
  * 这些是实现细节，留在各自模块里，不往公开面上放 —— 一旦放出去就改不动了。

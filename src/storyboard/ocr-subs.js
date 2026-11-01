@@ -16,6 +16,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { detectAndRead, OCR_MAX_ITEMS, ocrPython, shouldReplace } from './ocr.js';
+import { readEnv } from './config.js';
 
 const runFile = promisify(execFile);
 
@@ -54,7 +55,7 @@ export function applyOcrSamples(segments, samples, items) {
     const seg = segments[sample.idx];
     const ocrText = (items[k]?.text ?? '').replace(/\s+/g, '');
     const verdict = shouldReplace({ asr: seg.text, ocr: ocrText, conf: items[k]?.conf ?? 0 });
-    if (process.env.DSH_OCR_DEBUG) {
+    if (readEnv('ocrDebug', process.env)) {
       console.error('[ocr]', seg.from.toFixed(1), JSON.stringify(seg.text), '| ocr:', JSON.stringify(ocrText),
         '| conf', items[k]?.conf, '|', verdict.reason, verdict.cover ?? '');
     }

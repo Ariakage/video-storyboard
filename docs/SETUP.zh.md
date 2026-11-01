@@ -1,7 +1,7 @@
-# 配置手册 · 让插件能读 B 站和网页链接
+# 配置手册 · 让 skill 能读 B 站和网页链接
 
 > 面向两类人：① 想用 URL 模式的本机用户；② 从 GitHub 克隆下来自己跑的人。
-> 只用本地文件（`video_storyboard({ input: "D:/a.mp4" })`）的话，这份文档可以整篇跳过。
+> 只用本地文件（`node bin/storyboard.mjs "D:/a.mp4"`）的话，这份文档可以整篇跳过。
 
 ---
 
@@ -9,8 +9,8 @@
 
 | 依赖 | 本地文件模式 | URL 模式 | 说明 |
 |---|---|---|---|
-| **ffmpeg** | ✅ 必需 | ✅ 必需 | 7.0+，需在 `PATH` 上，或用 `DSH_FFMPEG_PATH` 指定 |
-| **yt-dlp** | — | ✅ 必需 | 解析直链 + 拉低清全片；**不打包进插件** |
+| **ffmpeg** | ✅ 必需 | ✅ 必需 | 7.0+，需在 `PATH` 上，或用 `VIDEO_STORYBOARD_FFMPEG_PATH` 指定 |
+| **yt-dlp** | — | ✅ 必需 | 解析直链 + 拉低清全片；**不打包进 skill** |
 | **cookies.txt** | — | ✅ 必需 | 默认策略要求登录（见 §3） |
 
 `ffmpeg` 的装法不在这里重复，见 `USAGE.zh.md`。
@@ -25,11 +25,11 @@
 pip install --user -U yt-dlp
 ```
 
-⚠️ 脚本会装到 `%APPDATA%\Python\Python3xx\Scripts`，**这个目录通常不在 PATH 上**。插件会自动去这几个位置找：
+⚠️ 脚本会装到 `%APPDATA%\Python\Python3xx\Scripts`，**这个目录通常不在 PATH 上**。工具会自动去这几个位置找：
 
 1. `PATH` 上的 `yt-dlp` / `yt-dlp.exe`
 2. `%APPDATA%\Python\Python3xx\Scripts\yt-dlp.exe`
-3. `DSH_YTDLP_PATH` 指定的路径
+3. `VIDEO_STORYBOARD_YTDLP` 指定的路径（旧名 `DSH_YTDLP_PATH`）
 
 都没有就会报错并附上安装命令——**不会静默降级成"没有这个功能"**。
 
@@ -55,7 +55,7 @@ sudo apt install yt-dlp    # Debian/Ubuntu（版本可能偏旧）
 | `pip install` | **约 25 MB**（`yt_dlp/` 包） + 0.1 MB 启动器 |
 | 单文件 `yt-dlp.exe` | 约 17 MB（自带 Python 运行时） |
 
-**这是用户侧的依赖，不是插件的体积。** 插件本身的 `package.json` 依然是零依赖。
+**这是用户侧的依赖，不是 skill 的体积。** `package.json` 依然是零依赖。
 
 ### 验证
 
@@ -101,23 +101,23 @@ Chromium 127+ 启用了 **App-Bound Encryption**，`SESSDATA` 这类关键 cooki
 
 ```bash
 # 方式一：环境变量（推荐）
-setx DSH_VIDEO_COOKIES "D:\deepseek\3-Life\.secrets\cookies.txt"
+setx VIDEO_STORYBOARD_COOKIES "D:\deepseek\3-Life\.secrets\cookies.txt"
 
 # 方式二：每次调用显式传
-video_storyboard({ input: "...", cookies: "D:/.../cookies.txt" })
+node bin/storyboard.mjs "..." --cookies "D:/.../cookies.txt"
 ```
 
-> 桌面版 DSH 读不到 `setx` 设的用户环境变量时，改走 `~/.dsh/asr.json` 同款文件配置思路——这一点和 ASR 的已知问题一致。
+> 桌面应用读不到 `setx` 设的用户环境变量时，改走 `~/.video-storyboard/asr.json` 同款文件配置思路——这一点和 ASR 的已知问题一致。
 
 ### 配置文件：桌面版必须用这个，别用 setx
 
-**DSH 桌面版读不到用户 `setx` 设的环境变量**（ASR 那边已经踩过同一个坑）。你在终端里配好了
-`DSH_VIDEO_COOKIES`，插件里依然说"没有 cookie"——不是它没读，是它读不到。
+**桌面应用的进程常常读不到用户 `setx` 设的环境变量**（ASR 那边已经踩过同一个坑）。你在终端里配好了
+`VIDEO_STORYBOARD_COOKIES`，agent 里依然说"没有 cookie"——不是它没读，是它读不到。
 
 所以配置写进文件：
 
 ```json
-// ~/.dsh/video.json
+// ~/.video-storyboard/video.json
 {
   "cookies": "D:/path/to/cookies.txt",
   "scanHeight": 360,
@@ -125,14 +125,14 @@ video_storyboard({ input: "...", cookies: "D:/.../cookies.txt" })
 }
 ```
 
-优先级：**工具参数 > 环境变量 > `~/.dsh/video.json`**。
+优先级：**命令行参数 > 环境变量 > `~/.video-storyboard/video.json`**。
 
-没有 cookie 也**不会报错**了：插件先用匿名地址探一次，能拿到目标档就照常跑（很多视频匿名
+没有 cookie 也**不会报错**了：工具先用匿名地址探一次，能拿到目标档就照常跑（很多视频匿名
 本来就有 1080p），拿不到才在结果里标 `degraded` 并给一条说明。
 
 ### 有效期
 
-`SESSDATA` 通常几个月。过期后 yt-dlp 会报 `Sign in` / `login` 相关文案，插件会识别并提示"重新导出"，不会抛原始 stderr。
+`SESSDATA` 通常几个月。过期后 yt-dlp 会报 `Sign in` / `login` 相关文案，工具会识别并提示"重新导出"，不会抛原始 stderr。
 
 ---
 
@@ -140,11 +140,11 @@ video_storyboard({ input: "...", cookies: "D:/.../cookies.txt" })
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `DSH_YTDLP_PATH` | 自动发现 | yt-dlp 可执行文件路径 |
-| `DSH_VIDEO_COOKIES` | 无 | cookies.txt 路径 |
-| `DSH_VIDEO_MEDIA_DIR` | `os.tmpdir()/dsh-video-storyboard/media` | 低清全片落盘位置 |
-| `DSH_VIDEO_MEDIA_MAX_MB` | `300` | 媒体缓存上限，超了按 mtime 从旧删 |
-| `DSH_FFMPEG_PATH` | `ffmpeg` | ffmpeg 路径（沿用 0.2.x） |
+| `VIDEO_STORYBOARD_YTDLP` | 自动发现 | yt-dlp 可执行文件路径 |
+| `VIDEO_STORYBOARD_COOKIES` | 无 | cookies.txt 路径 |
+| `VIDEO_STORYBOARD_MEDIA_DIR` | `os.tmpdir()/video-storyboard/media` | 低清全片落盘位置 |
+| `VIDEO_STORYBOARD_MEDIA_MAX_MB` | `300` | 媒体缓存上限，超了按 mtime 从旧删 |
+| `VIDEO_STORYBOARD_FFMPEG_PATH` | `ffmpeg` | ffmpeg 路径（沿用 0.2.x） |
 
 ---
 
@@ -167,7 +167,7 @@ yt-dlp -f "bv*[height<=360]+ba/b[height<=360]" -o "test.%(ext)s" \
   "<same URL>"
 
 # ⑤ 带 cookie 拿 1080P（验证登录态真的生效）
-yt-dlp --cookies "$DSH_VIDEO_COOKIES" -F "同上"   # 看列表里有没有 1920x1080
+yt-dlp --cookies "$VIDEO_STORYBOARD_COOKIES" -F "同上"   # 看列表里有没有 1920x1080
 ```
 
 ### 格式选择器必须用 DASH 语法
@@ -190,15 +190,15 @@ B 站的 yt-dlp extractor 给的是 **DASH 分轨**（video only + audio only）
 
 | 现象 | 真实原因 | 处理 |
 |---|---|---|
-| `yt-dlp not found` | 装在 `%APPDATA%\Python\...\Scripts` 但不在 PATH | 设 `DSH_YTDLP_PATH` |
+| `yt-dlp not found` | 装在 `%APPDATA%\Python\...\Scripts` 但不在 PATH | 设 `VIDEO_STORYBOARD_YTDLP` |
 | `Requested format is not available` | 用了 `b[height<=N]` 单段语法 | 改 `bv*[height<=N]+ba` |
 | `Failed to decrypt with DPAPI` | 试图读浏览器 cookie（v20 加密） | 按 §3 导出 cookies.txt |
-| `Sign in to confirm` / `login required` | cookie 过期或没传 | 重新导出；检查 `DSH_VIDEO_COOKIES` |
+| `Sign in to confirm` / `login required` | cookie 过期或没传 | 重新导出；检查 `VIDEO_STORYBOARD_COOKIES` |
 | `HTTP Error 412` | B 站风控（请求过密/无 UA） | 降低频率；确认带了 UA |
 | 下载卡在 0% | 网络或 CDN 节点问题 | 重试；检查是否需要代理 |
 | 竖屏视频被拉扁 | 旋转元数据未归一 | 这是 0.2.x 已修复的，报 bug |
-| 媒体目录占满 | 300 MB 上限内正常滚动 | 调 `DSH_VIDEO_MEDIA_MAX_MB` 或清空目录 |
-| 直链 2 小时后失效 | B 站签名 URL 有时效 | 插件会自动重解析一次；持续失败则回落低清 |
+| 媒体目录占满 | 300 MB 上限内正常滚动 | 调 `VIDEO_STORYBOARD_MEDIA_MAX_MB` 或清空目录 |
+| 直链 2 小时后失效 | B 站签名 URL 有时效 | 工具会自动重解析一次；持续失败则回落低清 |
 
 ---
 
@@ -207,4 +207,4 @@ B 站的 yt-dlp extractor 给的是 **DASH 分轨**（video only + audio only）
 - 视频内容只落本机临时目录，**不上传、不分发**
 - cookies.txt 只按路径传给 yt-dlp 子进程，**不写进返回值、日志、manifest**
 - 直链是带签名的临时凭证，缓存 90 分钟后失效即弃，不进持久层
-- 只用于你有权处理的素材；插件不内置下载器、不内置搜索、不缓存分发内容
+- 只用于你有权处理的素材；本 skill 不内置下载器、不内置搜索、不缓存分发内容

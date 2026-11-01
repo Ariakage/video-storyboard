@@ -13,11 +13,11 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { findPython } from './python.js';
+import { readEnv } from './config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -33,13 +33,13 @@ export const OCR_BRIDGE = join(HERE, '..', 'ocr_bridge.py');
 export const OCR_MAX_ITEMS = 16;
 
 /**
- * 从 `~/.dsh/video.json` 读 OCR 配置。
+ * 从配置目录下的 video.json 读 OCR 配置（默认 `~/.video-storyboard/video.json`）。
  *
- * 为什么读文件而不是只认环境变量：桌面版 DSH 的进程环境由启动器决定，
+ * 为什么读文件而不是只认环境变量：桌面应用的进程环境由启动器决定，
  * `setx` 设的变量宿主读不到（同 asr.json / tts.json 的理由）。
  *
  * ```json
- * // ~/.dsh/video.json
+ * // ~/.video-storyboard/video.json
  * { "ocr": { "python": "D:/ocr-local/.venv/Scripts/python.exe" } }
  * ```
  *
@@ -47,9 +47,8 @@ export const OCR_MAX_ITEMS = 16;
  * 用不上的东西。这里只负责"找到你自己装的那份"，跟 ffmpeg / yt-dlp 一个待遇。
  */
 function videoConfig(env = process.env) {
-  const home = env.DSH_HOME || join(env.USERPROFILE || env.HOME || homedir(), '.dsh');
   try {
-    const cfg = JSON.parse(readFileSync(join(home, 'video.json'), 'utf8'));
+    const cfg = JSON.parse(readFileSync(configPath(VIDEO_CONFIG_FILE, env), 'utf8'));
     return { ocr: cfg?.ocr, python: cfg?.ocr?.python ?? cfg?.python };
   } catch {
     return {}; // 没有配置文件是正常情况，继续走下面的候选链
@@ -115,14 +114,14 @@ function runBridge({ python, mode, images, timeoutMs = 120_000 }) {
               ? 'interpreter-missing'
               : 'bridge-crashed';
           const message = `${err.message ?? err}${stderr ? ` | ${String(stderr).trim().slice(0, 300)}` : ''}`;
-          if (process.env.DSH_OCR_DEBUG) console.error('[ocr-bridge]', mode, kind, message);
+          if (readEnv('ocrDebug', process.env)) console.error('[ocr-bridge]', mode, kind, message);
           return resolve({ ok: false, kind, message });
         }
         let parsed;
         try {
           parsed = JSON.parse(String(stdout ?? '').trim() || '{}');
         } catch {
-          if (process.env.DSH_OCR_DEBUG) {
+          if (readEnv('ocrDebug', process.env)) {
             console.error('[ocr-bridge]', mode, 'bridge-bad-json', String(stdout ?? '').slice(0, 300));
           }
           return resolve({

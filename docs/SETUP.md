@@ -1,7 +1,7 @@
 # Setup · Reading web links
 
 > For two audiences: local users who want the URL mode, and anyone cloning this from GitHub.
-> If you only ever pass local files (`video_storyboard({ input: "D:/a.mp4" })`), you can skip this document entirely.
+> If you only ever pass local files (`node bin/storyboard.mjs "D:/a.mp4"`), you can skip this document entirely.
 
 ---
 
@@ -9,7 +9,7 @@
 
 | Dependency | Local files | URL mode | Notes |
 |---|---|---|---|
-| **ffmpeg** | ✅ required | ✅ required | 7.0+, on `PATH`, under `$DSH_HOME/tools/ffmpeg/bin`, or via `DSH_FFMPEG_PATH` |
+| **ffmpeg** | ✅ required | ✅ required | 7.0+, on `PATH`, under `$VIDEO_STORYBOARD_HOME/tools/ffmpeg/bin`, or via `VIDEO_STORYBOARD_FFMPEG_PATH` |
 | **yt-dlp** | — | ✅ required | Resolves direct URLs and pulls the low-res copy. **Never bundled.** |
 | **cookies.txt** | — | ✅ required | Login is required by default (see §3) |
 
@@ -25,11 +25,11 @@ Installing ffmpeg is covered in `USAGE.md`.
 pip install --user -U yt-dlp
 ```
 
-⚠️ The script lands in `%APPDATA%\Python\Python3xx\Scripts`, which is **usually not on `PATH`**. The plugin looks in this order:
+⚠️ The script lands in `%APPDATA%\Python\Python3xx\Scripts`, which is **usually not on `PATH`**. The tool looks in this order:
 
 1. `yt-dlp` / `yt-dlp.exe` on `PATH`
 2. `%APPDATA%\Python\Python3xx\Scripts\yt-dlp.exe`
-3. Whatever `DSH_YTDLP_PATH` points to
+3. Whatever `VIDEO_STORYBOARD_YTDLP` points to
 
 If none of them exist it fails loudly with the install command — it never silently degrades into "feature unavailable".
 
@@ -54,7 +54,7 @@ sudo apt install yt-dlp    # Debian/Ubuntu (may lag behind)
 | `pip install` | **~25 MB** (`yt_dlp/` package) + 0.1 MB launcher |
 | Standalone `yt-dlp.exe` | ~17 MB (bundles the Python runtime) |
 
-**This is a user-side dependency, not plugin weight.** The plugin's `package.json` still has zero dependencies.
+**This is a user-side dependency, not skill weight.** The skill's `package.json` still has zero dependencies.
 
 ### Verify
 
@@ -100,22 +100,22 @@ You should get a **Netscape HTTP Cookie File** that looks like this:
 
 ```bash
 # Option A: environment variable (recommended)
-setx DSH_VIDEO_COOKIES "D:\path\to\cookies.txt"
+setx VIDEO_STORYBOARD_COOKIES "D:\path\to\cookies.txt"
 
 # Option B: pass it per call
-video_storyboard({ input: "...", cookies: "D:/path/to/cookies.txt" })
+node bin/storyboard.mjs "..." --cookies "D:/path/to/cookies.txt"
 ```
 
 ### Config file — on Desktop, use this instead of setx
 
-**DSH Desktop cannot read environment variables set with `setx`** (the ASR side already hit the same
-wall). You can export `DSH_VIDEO_COOKIES` in a terminal and the plugin will still report "no cookies" —
+**The desktop app often cannot read environment variables set with `setx`** (the ASR side already hit the same
+wall). You can export `VIDEO_STORYBOARD_COOKIES` in a terminal and the tool will still report "no cookies" —
 not because it ignores it, but because it never sees it.
 
 So configure through a file:
 
 ```json
-// ~/.dsh/video.json
+// ~/.video-storyboard/video.json
 {
   "cookies": "D:/path/to/cookies.txt",
   "scanHeight": 360,
@@ -123,15 +123,15 @@ So configure through a file:
 }
 ```
 
-Precedence: **tool argument > environment variable > `~/.dsh/video.json`**.
+Precedence: **tool argument > environment variable > `~/.video-storyboard/video.json`**.
 
-A missing cookie no longer raises an error: the plugin probes anonymously first and proceeds if the
+A missing cookie no longer raises an error: the tool probes anonymously first and proceeds if the
 source already offers the target tier (plenty of videos do, even anonymously). Only when it cannot does
 it mark `degraded` and add a note.
 
 ### Expiry
 
-`SESSDATA` typically lasts a few months. When it lapses yt-dlp reports a `Sign in` / `login` message; the plugin recognises it and tells you to re-export instead of dumping raw stderr.
+`SESSDATA` typically lasts a few months. When it lapses yt-dlp reports a `Sign in` / `login` message; the skill recognises it and tells you to re-export instead of dumping raw stderr.
 
 ---
 
@@ -139,11 +139,11 @@ it mark `degraded` and add a note.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DSH_YTDLP_PATH` | auto-discovered | Path to the yt-dlp binary |
-| `DSH_VIDEO_COOKIES` | none | Path to cookies.txt |
-| `DSH_VIDEO_MEDIA_DIR` | `os.tmpdir()/dsh-video-storyboard/media` | Where the low-res copy is cached |
-| `DSH_VIDEO_MEDIA_MAX_MB` | `300` | Media cache cap; evicts oldest by mtime |
-| `DSH_FFMPEG_PATH` | auto-discovered | ffmpeg path; explicit value wins over `DSH_HOME`/PATH lookup |
+| `VIDEO_STORYBOARD_YTDLP` | auto-discovered | Path to the yt-dlp binary |
+| `VIDEO_STORYBOARD_COOKIES` | none | Path to cookies.txt |
+| `VIDEO_STORYBOARD_MEDIA_DIR` | `os.tmpdir()/video-storyboard/media` | Where the low-res copy is cached |
+| `VIDEO_STORYBOARD_MEDIA_MAX_MB` | `300` | Media cache cap; evicts oldest by mtime |
+| `VIDEO_STORYBOARD_FFMPEG_PATH` | auto-discovered | ffmpeg path; explicit value wins over config-home/PATH lookup |
 
 ---
 
@@ -166,7 +166,7 @@ yt-dlp -f "bv*[height<=360]+ba/b[height<=360]" -o "test.%(ext)s" \
   "<same URL>"
 
 # 5. With cookies, check 1080p is visible (proves the login actually took)
-yt-dlp --cookies "$DSH_VIDEO_COOKIES" -F "same URL"
+yt-dlp --cookies "$VIDEO_STORYBOARD_COOKIES" -F "same URL"
 ```
 
 ### The format selector must use DASH syntax
@@ -190,15 +190,15 @@ yt-dlp --cookies "$DSH_VIDEO_COOKIES" -F "same URL"
 
 | Symptom | Real cause | Fix |
 |---|---|---|
-| `yt-dlp not found` | Installed under `%APPDATA%\Python\...\Scripts`, not on `PATH` | Set `DSH_YTDLP_PATH` |
+| `yt-dlp not found` | Installed under `%APPDATA%\Python\...\Scripts`, not on `PATH` | Set `VIDEO_STORYBOARD_YTDLP` |
 | `Requested format is not available` | Used progressive `b[height<=N]` syntax | Use `bv*[height<=N]+ba` |
 | `Failed to decrypt with DPAPI` | Tried to read browser cookies (v20 encryption) | Export cookies.txt per §3 |
-| `Sign in to confirm` / login required | Cookie expired or not passed | Re-export; check `DSH_VIDEO_COOKIES` |
+| `Sign in to confirm` / login required | Cookie expired or not passed | Re-export; check `VIDEO_STORYBOARD_COOKIES` |
 | `HTTP Error 412` | Site risk control (rate limiting, missing UA) | Slow down; make sure a UA is sent |
 | Download stuck at 0% | Network or CDN node | Retry; check proxy needs |
 | Portrait video squashed | Rotation metadata not normalised | Fixed in 0.2.x — file a bug |
-| Media dir keeps filling | Normal rolling within the 300 MB cap | Raise `DSH_VIDEO_MEDIA_MAX_MB` or clear it |
-| Direct URL dies after ~2 h | Signed URLs expire | The plugin re-resolves once, then falls back to the low-res copy |
+| Media dir keeps filling | Normal rolling within the 300 MB cap | Raise `VIDEO_STORYBOARD_MEDIA_MAX_MB` or clear it |
+| Direct URL dies after ~2 h | Signed URLs expire | The tool re-resolves once, then falls back to the low-res copy |
 
 ---
 
@@ -207,4 +207,4 @@ yt-dlp --cookies "$DSH_VIDEO_COOKIES" -F "same URL"
 - Video content stays in a local temp directory. **Never uploaded, never redistributed.**
 - cookies.txt is only passed by path to the yt-dlp child process. **Never written into return values, logs, or the manifest.**
 - Direct URLs are signed temporary credentials: cached for 90 minutes, then dropped. They never enter the persistent cache layer.
-- Use it only for material you have the right to process. The plugin bundles no downloader, no search, and never caches or redistributes content.
+- Use it only for material you have the right to process. This skill bundles no downloader, no search, and never caches or redistributes content.

@@ -22,6 +22,8 @@
 
 import { cpus } from 'node:os';
 
+import { readEnv } from './config.js';
+
 import { probeVideo, DEFAULT_FFMPEG, DEFAULT_FFPROBE } from './probe.js';
 import { resolveInput } from './fetch.js';
 import {
@@ -307,6 +309,8 @@ export async function runStoryboard(opts) {
   // ---- 台词：显式文件 > 字幕轨 > ASR；三者都没有就静默跳过（绝不让分镜失败）
   const transcriptResult = await transcriptP;
   let { transcriptInfo } = transcriptResult;
+  // locate 紧接着跑是最常见的顺序：把这份转写留在进程内，省掉第二次 ASR/读盘。
+  rememberSegments(input, transcriptInfo?.segments);
   const { textInSilence } = transcriptResult;
   let ocrReport = null;
   if (ocr && transcriptInfo?.source === 'asr' && (transcriptInfo.segments?.length ?? 0) > 0) {
@@ -314,7 +318,7 @@ export async function runStoryboard(opts) {
       input, winStart, winDur, ffmpegPath, segments: transcriptInfo.segments, remoteFrame,
       sourceCopyHeight: sourceInfo ? (sourceInfo.scanActual ?? sourceInfo.scanHeight ?? null) : null,
     }).catch((e) => {
-      if (process.env.DSH_OCR_DEBUG) console.error('[ocr]', e?.message ?? e);
+      if (readEnv('ocrDebug', process.env)) console.error('[ocr]', e?.message ?? e);
       return { status: 'failed', reason: String(e?.message ?? e).slice(0, 160) };
     });
     if (ocrReport?.status === 'applied' && ocrReport.fixed > 0) {
@@ -502,7 +506,7 @@ export async function runStoryboard(opts) {
           const tiers2 = [...cur.tiers.slice(0, first),
             ...new Array(small).fill(tier), ...cur.tiers.slice(last + 1)];
           const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
-          if (process.env.DSH_PLAN_DEBUG) {
+          if (readEnv('planDebug', process.env)) {
             console.error(`[fillGaps] coarsen bin=${worst.bin} ${nb}->${small} tier=${tier}`
               + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
               + ` deficit=${deficitOf(cur.plan).toFixed(3)}->${deficitOf(p2).toFixed(3)}`);
@@ -542,7 +546,7 @@ export async function runStoryboard(opts) {
           const tiers2 = [...cur.tiers.slice(0, first),
             ...new Array(sq).fill(tier), ...cur.tiers.slice(last + 1)];
           const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
-          if (process.env.DSH_PLAN_DEBUG) {
+          if (readEnv('planDebug', process.env)) {
             console.error(`[fillGaps] uniform bin=${worst.bin} ${nb}->${sq} tier=${tier}`
               + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
               + ` deficit=${deficitOf(cur.plan).toFixed(3)}->${deficitOf(p2).toFixed(3)}`);
@@ -587,7 +591,7 @@ export async function runStoryboard(opts) {
           tiers2.splice(c2.i, 1, cur.tiers[c2.i], cur.tiers[c2.i]);
         }
         const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
-        if (process.env.DSH_PLAN_DEBUG) {
+        if (readEnv('planDebug', process.env)) {
           console.error(`[fillGaps] bin=${worst.bin} n=${n} toSquare=+${toSquare}`
             + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
             + ` deficit=${deficitOf(cur.plan).toFixed(3)}->${deficitOf(p2).toFixed(3)}`);
@@ -608,7 +612,7 @@ export async function runStoryboard(opts) {
           segs2.splice(pick.i, 1, ...parts);
           tiers2.splice(pick.i, 1, cur.tiers[pick.i], 0);
           const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
-          if (process.env.DSH_PLAN_DEBUG) {
+          if (readEnv('planDebug', process.env)) {
             console.error(`[fillGaps] bin=${worst.bin} free-filler seg=${pick.i}`
               + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
               + ` deficit=${deficitOf(cur.plan).toFixed(3)}->${deficitOf(p2).toFixed(3)}`);
@@ -774,9 +778,9 @@ export async function runStoryboard(opts) {
   // - 远程直链要带 header、一次 HTTP seek 1.9s，批量反而更糟；
   // - pick='sharp' 要每格解 3 个候选帧再挑最锐的，和"一次解码"是两套语义。
   //
-  // `DSH_EXTRACT_MODE=single` 强制逐帧：批量路径的像素是"先缩到源比例、再盒式 cover 到目标格"
+  // `VIDEO_STORYBOARD_EXTRACT_MODE=single` 强制逐帧：批量路径的像素是"先缩到源比例、再盒式 cover 到目标格"
   // （两次采样 ≈ 一次采样），需要逐位复现旧输出、或怀疑某片源 select 帧号对不上时用它。
-  const useBatch = pick === 'mid' && !remoteFrame && process.env.DSH_EXTRACT_MODE !== 'single';
+  const useBatch = pick === 'mid' && !remoteFrame && readEnv('extractMode', process.env) !== 'single';
   if (useBatch) {
     const list = jobs.map((j) => ({
       at: j.cell.t, cellW: j.rect.pw, cellH: j.rect.ph, key: `${j.si}:${j.k}`,
@@ -960,7 +964,7 @@ export async function runStoryboard(opts) {
     } : {}),
   };
 
-  // 记下"这一格 = 这段**绝对**时间"，供 video_zoom({ cellId }) 直接寻址。
+  // 记下"这一格 = 这段**绝对**时间"，供 zoom --cell-id 直接寻址。
   if (!textOnly) {
     const cellTimes = [];
     for (const sheet of out) {
@@ -975,7 +979,7 @@ export async function runStoryboard(opts) {
 /* ---- 兼容入口 ---------------------------------------------------------------
  * `./pipeline` 是 package.json 里公开的子路径（老版本把清单渲染也放在这里）。
  * 内部代码一律直接从 format.js / scan.js 取；这一段只为不让已经
- * `import { formatManifest } from 'dsh-video-storyboard/pipeline'` 的调用方断掉。
+ * `import { formatManifest } from 'video-storyboard-skill/pipeline'` 的调用方断掉。
  */
 export {
   DETAIL_CHARS, buildEvidence, countTextInSilence, formatForDetail, formatManifest,

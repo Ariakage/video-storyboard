@@ -18,7 +18,11 @@ import { homedir } from 'node:os';
 import { fileExists } from './media-store.js';
 import { delimiter, join } from 'node:path';
 
-export const COOKIES_ENV = 'DSH_VIDEO_COOKIES';
+import {
+  ENV, VIDEO_CONFIG_FILE, configPath, envName, readEnv,
+} from './config.js';
+
+export const COOKIES_ENV = ENV.cookies[0];
 
 /** 与 DSH 默认一致的浏览器 UA —— C站 CDN 对空 UA 直接 403 */
 export const DEFAULT_UA =
@@ -29,7 +33,7 @@ const INSTALL_HINT = [
   '  pip install --user -U yt-dlp        (Windows/macOS/Linux)',
   '  winget install yt-dlp               (Windows)',
   '  brew install yt-dlp                 (macOS)',
-  'Then either put it on PATH or set DSH_YTDLP_PATH to the executable.',
+  'Then either put it on PATH or set VIDEO_STORYBOARD_YTDLP to the executable.',
 ].join('\n');
 
 /* ------------------------------------------------------------------ yt-dlp 发现 */
@@ -83,7 +87,7 @@ export async function findPipScript(env = process.env) {
  * @returns {Promise<{bin:string, prefix:string[], version:string}>}
  */
 export async function discoverYtdlp({ env = process.env, run = runProcess } = {}) {
-  const explicit = env.DSH_YTDLP_PATH;
+  const explicit = readEnv('ytdlp', env);
   const candidates = [];
   if (explicit) candidates.push(explicit);
   candidates.push(await findOnPath('yt-dlp', env));
@@ -150,19 +154,18 @@ export function runProcess({ bin, prefix = [] }, args, { timeoutMs = 120_000, si
 
 /* ------------------------------------------------------------------ 配置 */
 
-export const CONFIG_FILE = 'video.json';
+export const CONFIG_FILE = VIDEO_CONFIG_FILE;
 
 /**
- * 读 `~/.dsh/video.json`。
+ * 读配置目录下的 video.json（默认 `~/.video-storyboard/video.json`）。
  *
- * 为什么必须有这个：**DSH 桌面版读不到用户 `setx` 设的环境变量**（ASR 那边已经踩过一次，
- * 所以 asr.json 存在）。只靠 env 的话，用户在终端里配好了、插件里依然是"没有 cookie"。
+ * 为什么必须有这个：桌面应用常常读不到用户 `setx` 设的环境变量（ASR 那边已经踩过一次，
+ * 所以 asr.json 存在）。只靠 env 的话，用户在终端里配好了、agent 里依然是"没有 cookie"。
  * 配置文件是唯一可靠的通道。
  */
 export async function loadVideoConfig({ env = process.env } = {}) {
-  const home = env.DSH_HOME || join(homedir(), '.dsh');
   try {
-    const raw = JSON.parse(await readFile(join(home, CONFIG_FILE), 'utf8'));
+    const raw = JSON.parse(await readFile(configPath(CONFIG_FILE, env), 'utf8'));
     return raw && typeof raw === 'object' ? raw : {};
   } catch {
     return {};
@@ -172,7 +175,7 @@ export async function loadVideoConfig({ env = process.env } = {}) {
 /* ------------------------------------------------------------------ 认证 */
 
 /**
- * 认证来源：显式参数 > 环境变量 > `~/.dsh/video.json`。
+ * 认证来源：显式参数 > 环境变量 > video.json。
  *
  * **没有 cookie 不再阻断。** 早期版本直接抛错，结果在真实使用里被证明是错的：
  * 同一条视频匿名可能已经有 1080P（实测 `BV1BK411Q7ys` 就是这样），硬拦只会让模型
@@ -183,12 +186,12 @@ export async function loadVideoConfig({ env = process.env } = {}) {
  */
 export async function resolveAuth({ cookies, allowAnonymous = false, env = process.env, config = null } = {}) {
   const cfg = config ?? await loadVideoConfig({ env });
-  const path = cookies || env[COOKIES_ENV] || cfg.cookies;
+  const path = cookies || readEnv('cookies', env) || cfg.cookies;
   if (path) {
     if (!(await fileExists(path))) {
       throw new Error(
         `cookies file not found: ${path}\n` +
-        `fix ${COOKIES_ENV} or the "cookies" field in ~/.dsh/${CONFIG_FILE}`,
+        `fix ${COOKIES_ENV} or the "cookies" field in ${configPath(CONFIG_FILE, env)}`,
       );
     }
     return { kind: 'cookies', cookiesPath: path, warning: null };
@@ -199,7 +202,7 @@ export async function resolveAuth({ cookies, allowAnonymous = false, env = proce
     // allowAnonymous 现在的含义是"我知道是匿名，别提醒我"，而不是"允许匿名"
     warning: allowAnonymous
       ? null
-      : 'anonymous: resolution is not guaranteed (no cookies in DSH_VIDEO_COOKIES or ~/.dsh/video.json)',
+      : `anonymous: resolution is not guaranteed (no cookies in ${COOKIES_ENV} or ${configPath(CONFIG_FILE)})`,
   };
 }
 
@@ -211,14 +214,15 @@ export function explainYtdlpError(stderr, code = 1) {
       'which yt-dlp cannot read. Export cookies.txt with a browser extension instead of using --cookies-from-browser.';
   }
   if (/Sign in to confirm|login required|需要登录|Please log in/i.test(text)) {
-    return 'this video needs a signed-in session. Export cookies.txt and set DSH_VIDEO_COOKIES ' +
-      '(or "cookies" in ~/.dsh/video.json) — SESSDATA may also have expired. See docs/SETUP.md.';
+    return 'this video needs a signed-in session. Export cookies.txt and set ' + COOKIES_ENV +
+      ` (or "cookies" in ${configPath(CONFIG_FILE)}) — SESSDATA may also have expired. ` +
+      'See docs/SETUP.md.';
   }
   if (/HTTP Error 567/i.test(text)) {
     return 'C站 refused this request (HTTP 567) — that is their risk control, not a plugin bug. ' +
       'It usually means the video needs a signed-in session (1080P+, 会员/付费, or a fresh rate-limit). ' +
       'Fix: export cookies.txt (README "needs a signed-in video" / docs/SETUP.md §3) and point ' +
-      'DSH_VIDEO_COOKIES at it, or download the file yourself and pass a local path. ' +
+      `${COOKIES_ENV} at it, or download the file yourself and pass a local path. ` +
       'Anonymous 360P usually still works on ordinary videos.';
   }
   if (/HTTP Error 412/i.test(text)) {

@@ -234,7 +234,7 @@ test('formatManifest: 有快剪爆发时报出区间与镜头数', () => {
   ] };
   const text = formatManifest(r, { maxChars: 200_000 });
   assert.match(text, /fast cuts: 00:42\.80-01:04\.80 \(22 shots\)/);
-  assert.match(text, /minGap: 0\.4/);
+  assert.match(text, /--from\/--to/);
 });
 
 test('formatManifest: asr-empty 说明"没有台词"而不是"字幕坏了"', () => {
@@ -267,7 +267,7 @@ test('formatManifest: 未合流的 DASH 音频指向 ffmpeg，而不是让人换
   r.transcript = { source: 'no-audio', segments: 0 };
   const text = formatManifest(r, { maxChars: 200_000 });
   assert.match(text, /separate file instead of merging/);
-  assert.match(text, /DSH_FFMPEG_PATH/);
+  assert.match(text, /VIDEO_STORYBOARD_FFMPEG_PATH/);
   assert.ok(!/Pass cookies/.test(text), '合流失败不是 cookies 能修的');
 });
 
@@ -430,8 +430,8 @@ test('看不清时清单必须主动说，并给三条可执行的改法', () =>
   const text = formatManifest(r, { maxChars: 200_000 });
   assert.match(text, /!! the smallest cells are 100x56/);
   assert.match(text, /colour blocks rather than/);
-  assert.match(text, /strategy:"quality"/, '要给出"升一档"这条路');
-  assert.match(text, /video_zoom/, '要给出 zoom 这条路');
+  assert.match(text, /--strategy full/, '要给出"升一档"这条路');
+  assert.match(text, /zoom on the 1-2 frames/, '要给出 zoom 这条路');
   assert.match(text, /capped at 800x800/, '要说明加预算没用（800 是硬上限）');
   // 格子够大时不要唠叨
   r.plan = { ...r.plan, cell: { w: 400, h: 225, readability: 'scene' } };

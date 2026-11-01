@@ -11,49 +11,46 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { DEFAULT_FFMPEG } from './probe.js';
+import {
+  ASR_CONFIG_FILE, ENV, configPath, envValue, readEnv,
+} from './config.js';
 
 const run = promisify(execFile);
 
 /**
- * 桌面版 DSH 的进程 env 由启动器决定：用户 setx 之后宿主进程里仍然没有 DSH_ASR_KEY
+ * 桌面应用的进程 env 由启动器决定：用户 setx 之后宿主进程里仍然没有 ASR key
  * （实测 `ops_bash` 子进程继承了宿主的 DSH_* 变量，唯独没有这两个）。所以再给一条
- * 不依赖 env 的路 —— 读 $DSH_HOME/asr.json：
+ * 不依赖 env 的路 —— 读配置目录下的 asr.json（默认 `~/.video-storyboard/asr.json`，
+ * 旧的 `~/.dsh/asr.json` 仍然认）：
  *
  *   { "baseUrl": "http://127.0.0.1:8000/v1", "key": "local-key", "model": "...", "language": "zh" }
  *
- * 优先级：环境变量 > $DSH_HOME/asr.json > 内置默认（SiliconFlow）。
+ * 优先级：环境变量 > asr.json > 内置默认（SiliconFlow）。
  */
 function readConfigFile(env) {
-  // DSH_HOME 一旦显式给了，就**只认它**：否则"指到一个空目录"会和"没指"完全等价，
+  // HOME 一旦显式给了，就**只认它**：否则"指到一个空目录"会和"没指"完全等价，
   // 测试里想隔离本机配置根本做不到（实测：设了空 DSH_HOME 仍然读到了 ~/.dsh/asr.json）。
-  const candidates = env.DSH_HOME
-    ? [join(env.DSH_HOME, 'asr.json')]
-    : [join(homedir(), '.dsh', 'asr.json')];
-  for (const path of candidates) {
-    if (!existsSync(path)) continue;
-    // 文件存在但坏了：直接当成"没有配置"，不要再穿透到下一个候选，
-    // 否则 $DSH_HOME 里的坏配置会被 ~/.dsh 的那份悄悄顶替掉，排查时看不出问题。
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf8'));
-      if (parsed && typeof parsed === 'object') return { ...parsed, path };
-    } catch {
-      return {};
-    }
+  const path = configPath(ASR_CONFIG_FILE, env);
+  if (!existsSync(path)) return {};
+  // 文件存在但坏了：直接当成"没有配置"，不要再穿透到别的候选，
+  // 否则坏配置会被下一份悄悄顶替掉，排查时看不出问题。
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    if (parsed && typeof parsed === 'object') return { ...parsed, path };
+  } catch {
     return {};
   }
   return {};
 }
 
 /**
- * 解析 ASR 配置。优先级：**环境变量 > $DSH_HOME/asr.json > 内置默认**。
+ * 解析 ASR 配置。优先级：**环境变量 > asr.json > 内置默认**。
  *
- * 为什么要读文件：桌面版 DSH 的进程 env 由启动器决定，用户 setx 之后宿主进程里
- * 仍然读不到 `DSH_ASR_KEY`（实测 `ops_bash` 子进程继承了 DSH_* 变量，唯独没有这两个）。
+ * 为什么要读文件：桌面应用的进程 env 由启动器决定，用户 setx 之后宿主进程里
+ * 仍然读不到 ASR key（实测 `ops_bash` 子进程继承了 DSH_* 变量，唯独没有这两个）。
  * 文件路径不依赖 env 传播，是更可靠的一层。
  *
  * @returns {{baseUrl:string, model:string, keyEnv:string, language:string, fileKey?:string, source:'env'|'file'|'default', configPath?:string}}
@@ -90,7 +87,7 @@ export function needsCloudKey(baseUrl, key) {
 /** 这次调用实际会用的 key：undefined = 走 env / asr.json；显式值（含 null / ''）= 调用方说了算。 */
 export function effectiveAsrKey(cfg = ASR_DEFAULTS, apiKey) {
   return apiKey === undefined
-    ? cleanEnvValue(process.env[cfg.keyEnv]) || cfg.fileKey
+    ? cleanEnvValue(envValue(process.env, cfg.keyEnv, ...ENV.asrKey)) || cfg.fileKey
     : apiKey;
 }
 
@@ -113,11 +110,12 @@ export function resolveAsrConfig(env = process.env) {
   const stamp = asrConfigStamp(env);
   if (asrMemo && stamp === asrMemoStamp) return asrMemo;
   const file = readConfigFile(env);
-  const envBaseUrl = cleanEnvValue(env.DSH_ASR_BASE_URL);
-  const envModel = cleanEnvValue(env.DSH_ASR_MODEL);
-  const envLanguage = cleanEnvValue(env.DSH_ASR_LANG);
-  const keyEnv = cleanEnvValue(env.DSH_ASR_KEY_ENV) || 'DSH_ASR_KEY';
-  const fromEnv = Boolean(envBaseUrl || env[keyEnv]);
+  const envBaseUrl = cleanEnvValue(readEnv('asrBaseUrl', env));
+  const envModel = cleanEnvValue(readEnv('asrModel', env));
+  const envLanguage = cleanEnvValue(readEnv('asrLang', env));
+  const keyEnv = cleanEnvValue(envValue(env, 'VIDEO_STORYBOARD_ASR_KEY_ENV', 'DSH_ASR_KEY_ENV'))
+    || ENV.asrKey[0];
+  const fromEnv = Boolean(envBaseUrl || envValue(env, keyEnv, ...ENV.asrKey));
   const resolved = {
     baseUrl: envBaseUrl || file.baseUrl || 'https://api.siliconflow.cn/v1',
     model: envModel || file.model || 'FunAudioLLM/SenseVoiceSmall',
@@ -143,20 +141,18 @@ let asrMemoStamp = '';
 
 /** 配置"指纹"：文件 mtime/size + 关键环境变量。变了就重读。 */
 function asrConfigStamp(env) {
-  const paths = env.DSH_HOME
-    ? [join(env.DSH_HOME, 'asr.json')]
-    : [join(homedir(), '.dsh', 'asr.json')];
-  const files = paths.map((p) => {
-    try {
-      const s = statSync(p);
-      return `${p}:${s.mtimeMs}:${s.size}`;
-    } catch {
-      return `${p}:-`;
-    }
-  });
-  const envBits = ['DSH_ASR_BASE_URL', 'DSH_ASR_MODEL', 'DSH_ASR_LANG', 'DSH_ASR_KEY_ENV', 'DSH_ASR_KEY']
-    .map((k) => `${k}=${env[k] ?? ''}`);
-  return [...files, ...envBits].join('|');
+  const p = configPath(ASR_CONFIG_FILE, env);
+  let file = `${p}:-`;
+  try {
+    const s = statSync(p);
+    file = `${p}:${s.mtimeMs}:${s.size}`;
+  } catch { /* 文件不存在 */ }
+  const keys = [
+    ...ENV.asrBaseUrl, ...ENV.asrModel, ...ENV.asrLang,
+    'VIDEO_STORYBOARD_ASR_KEY_ENV', 'DSH_ASR_KEY_ENV', ...ENV.asrKey,
+  ];
+  const envBits = keys.map((k) => `${k}=${env[k] ?? ''}`);
+  return [file, ...envBits].join('|');
 }
 
 /**

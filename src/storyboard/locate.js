@@ -4,7 +4,7 @@
  * 为什么需要：模型想知道一句台词的位置时，现在只有两条路 —— 通读清单（贵、且清单有分页），
  * 或者整段 zoom 再看一遍（384 token）。而这句话其实**已经在转写结果里了**，本来就该零成本。
  *
- * 这里只做匹配，不碰 ffmpeg、不出图。返回的时间段可以直接喂给 video_zoom。
+ * 这里只做匹配，不碰 ffmpeg、不出图。返回的时间段可以直接喂给 zoom 命令（--from/--to）。
  */
 
 /** 归一化：去标点空白、转小写。中文按字比，英文按词比，两种都能用 */
@@ -102,7 +102,7 @@ export function formatMatches(query, matches, { total = 0 } = {}) {
   return [
     `matches for "${query}" (${matches.length} of ${total} segments):`,
     ...lines,
-    'Feed any of these windows to video_zoom({ from, to }) — no need to re-read the whole film.',
+    'Feed any of these windows to the zoom command (--from/--to, or --cell-id) — no need to re-read the whole film.',
   ].join('\n');
 }
 

@@ -7,13 +7,14 @@
  * **不缓存**响度序列：2 小时片子有 7 万个点，JSON 会涨到几百 KB；而音频解码比
  * 视频解码便宜得多，重算更划算。
  *
- * 目录可用 DSH_VIDEO_CACHE_DIR 指定（C 盘紧张时指到别的盘）。
+ * 目录可用 VIDEO_STORYBOARD_CACHE_DIR 指定（C 盘紧张时指到别的盘）。
  */
 
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { appDir, readEnv } from './config.js';
 
 // 缓存版本：**切点判定逻辑一变就要加 1** —— 版本进了 key，旧条目自动失效，不需要用户手清。
 // 1 → 2：0.4.3 改了极静素材的相对基线判定（spikeCuts）、平铺格与 suppressClose 的用法，
@@ -52,11 +53,9 @@ export const PROTECTED_FILES = Object.freeze([
 ]);
 
 export function cacheDir(env = process.env) {
-  if (env.DSH_VIDEO_CACHE_DIR) return env.DSH_VIDEO_CACHE_DIR;
-  if (process.platform === 'win32' && env.LOCALAPPDATA) {
-    return join(env.LOCALAPPDATA, 'dsh-video-storyboard', 'cache');
-  }
-  return join(env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'dsh-video-storyboard');
+  const explicit = readEnv('cacheDir', env);
+  if (explicit) return explicit;
+  return join(appDir(env), 'cache');
 }
 
 /**

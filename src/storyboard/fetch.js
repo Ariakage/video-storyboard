@@ -17,6 +17,8 @@ import {
   access, mkdir, readFile, readdir, rename, rm, stat, writeFile,
 } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+
+import { readEnv } from './config.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -146,7 +148,7 @@ export async function fetchMedia(input, opts = {}) {
   const tool = ytdlp || await discoverYtdlp({ env, run });
 
   // `DEFAULT_FFMPEG` 是模块加载那一刻的快照：用户在会话中间装了 ffmpeg、或者刚设了
-  // DSH_FFMPEG_PATH，这里必须能捡到。拿不到绝对路径就不传 `--ffmpeg-location`（传个裸名
+  // VIDEO_STORYBOARD_FFMPEG_PATH，这里必须能捡到。拿不到绝对路径就不传 `--ffmpeg-location`（传个裸名
   // 等于没传），改为在下完货之后用**磁盘证据**把"音轨没合进去"说清楚。
   const ffmpegAbs = isAbsolute(ffmpegPath) ? ffmpegPath : (resolveMediaBinary('ffmpeg', { env }) ?? null);
 
@@ -176,7 +178,7 @@ export async function fetchMedia(input, opts = {}) {
       return await stat(target);
     } catch (e) {
       await rm(tmp, { force: true }).catch(() => {});
-      if (process.env.DSH_VIDEO_DEBUG) console.error('[fetch] merge failed:', e?.message ?? e);
+      if (readEnv('debug', process.env)) console.error('[fetch] merge failed:', e?.message ?? e);
       return null;
     }
   };
@@ -286,7 +288,7 @@ export async function fetchMedia(input, opts = {}) {
     '-f', formatSelector(scanHeight),
     // 按"短边"就近取：竖屏视频的 res 是宽（360/480/720），不是 height。
     ...(Number.isFinite(scanHeight) && scanHeight > 0 ? ['-S', `res:${Math.round(scanHeight)}`] : []),
-    // DSH 桌面版常把 ffmpeg 放在 $DSH_HOME/bin 而不进 PATH；yt-dlp 只认 PATH 或这个参数。
+    // 桌面版常把 ffmpeg 放在配置目录/bin 而不进 PATH；yt-dlp 只认 PATH 或这个参数。
     ...(ffmpegAbs ? ['--ffmpeg-location', ffmpegAbs] : []),
     // **不要 --no-warnings**：yt-dlp 找不到 ffmpeg 时只打一行 warning 就**静默降级成只下视频**，
     // 关掉警告等于把唯一的现场证据扔掉（#43/#44 都是这么"什么错都不报"的）。

@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.0.0] - 2026-11-01
+
+> **破坏性变更**：项目从 DeepSeek Harness 插件改成通用 Agent Skill。宿主插件层移除，
+> 所有能力改由 `SKILL.md` + `bin/` 命令行提供。
+
+### 新增：Skill 入口
+
+- `SKILL.md`：技能 frontmatter、agent 阅读顺序（probe → storyboard → 读图 → zoom/locate）、
+  引用规范、成本与长片策略。
+- `references/cli.md` / `references/strategy.md` / `references/asr.md`：按需加载的详细文档。
+- `scripts/install-skill.mjs`：复制或软链到 `~/.claude/skills/video-storyboard`，
+  支持 `--dest` / `--check` / `--remove` / `--force`。
+
+### 新增：命令行的完整能力对齐
+
+- `bin/probe.mjs`：只读容器头；链接只解析、不下载。
+- `bin/zoom.mjs`：单窗口放大，支持 `--cell-id`（复用上次分镜的格子表）。
+- `bin/locate.mjs`：纯文本定位；没有缓存转写时补跑一次 textOnly 管线。
+- `bin/subtitles.mjs`：硬字幕竖长图，直接落盘。
+- `bin/storyboard.mjs`：新增 `--probe`、`--cell-id`、`--json`（stdout 纯 JSON，进度走 stderr），
+  修复 `--no-snap` 从未生效的问题。
+
+### 移除：DSH 插件层
+
+- 删除 `dsh.plugin.json`、`cordis.patch.yml`、`src/index.js`、`src/tools/*`、
+  `src/storyboard/register.js`、`src/storyboard/tool-spec.js`、`src/tool-spec.js`、
+  `scripts/install-dev.mjs` 及其专项测试。
+- `package.json` 移除 `dsh` 字段与 `@deepseek-ai/dsh-tools` peerDependency；
+  `main` 指向 `src/storyboard/index.js`；bin 改为中立的 `video-*` 名称。
+- 包名 `dsh-video-storyboard` → `video-storyboard-skill`（仓库地址不变）。
+
+### 配置：中立命名 + 兼容旧名
+
+- 新增 `src/storyboard/config.js`：配置目录默认 `~/.video-storyboard`；若 `~/.dsh` 里已有
+  `video.json` / `asr.json` 则继续沿用。
+- 环境变量新增 `VIDEO_STORYBOARD_*`，旧 `DSH_*` 全部保留为别名（含 `DSH_HOME`）。
+- 缓存/媒体目录改名 `video-storyboard`。
+
+### 修复
+
+- 管线现在把本次转写交给 `rememberSegments()`，同进程的 locate 不再白跑一次 ASR。
+- `formatMatches` 的提示改为命令行说法，不再指向已不存在的 `video_zoom` 工具。
+
 ## [0.6.0] - 2026-11-01
 
 > **破坏性重构**：`cells` / `sheets` / `need` / `maxPerSheet` / `adaptive` / `tileFirst` /

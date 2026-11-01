@@ -12,7 +12,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { lookupCell, saveCells } from '../src/storyboard/cells.js';
-import { validateZoomArgs } from '../src/tool-spec.js';
 
 test('cells: 存了就能按 id 查回绝对时间', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cells-'));
@@ -68,11 +67,3 @@ test('cells: 没记过就返回 null（调用方据此报错，不猜窗口）',
     await rm(dir, { recursive: true, force: true });
   }
 });
-
-test('validateZoomArgs: 有 cellId 就不再强制 from/to；越界的 cellId 要拒', () => {
-  assert.deepEqual(validateZoomArgs({ input: 'a.mp4', from: 12, to: 15 }), []);
-  assert.deepEqual(validateZoomArgs({ input: 'a.mp4', cellId: 3 }), []);
-  assert.ok(validateZoomArgs({ input: 'a.mp4' }).some((p) => /cellId/.test(p)));
-  assert.ok(validateZoomArgs({ input: 'a.mp4', cellId: 0 }).some((p) => /cellId/.test(p)));
-});
-

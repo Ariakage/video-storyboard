@@ -5,8 +5,7 @@
  *   node bin/asr-check.mjs <video> [--from 60] [--seconds 12]
  *
  * 顺序：字幕轨 → ASR。
- * 「这次会不会真转写」用 `canTranscribe()` 判 —— 和 `video_storyboard` 同一句话：
- * 本机地址（127.0.0.1 / localhost / [::1]）按设计**不需要 key**，只有云端才要。
+ * 「这次会不会真转写」用 `canTranscribe()` 判 —— 和 storyboard 命令同一句话：本机地址（127.0.0.1 / localhost / [::1]）按设计**不需要 key**，只有云端才要。
  * 配了 `manage.start` 就先把托管服务拉起来，连不上时给人话而不是抛栈。
  */
 import { args as parse } from './_args.mjs';
@@ -51,7 +50,7 @@ if (info.hasSubtitle) {
 //
 // issue #41：这里原来只看 `ASR_DEFAULTS.fileKey || process.env[keyEnv]`，
 // 于是把"本机 127.0.0.1:8000 正在跑、按设计不需要 key"误判成"没配 → 不会转写"，
-// 而 `video_storyboard` 用 canTranscribe 判得对 —— 同一个环境，脚本说不能跑、工具能跑。
+// 而 storyboard 命令用 canTranscribe 判得对 —— 同一个环境，脚本说不能跑、工具能跑。
 // 顺带：这个脚本从不 import asr-lifecycle，`manage.start` 配了也不会拉起服务，
 // 而 `doctor.mjs` 第 5 步恰恰把它推给正在排障的人。
 const asrCfg = resolveAsrConfig();
@@ -61,12 +60,12 @@ if (!canTranscribe(asrCfg, apiKey)) {
   console.log(`\n这是云端地址（${asrCfg.baseUrl}），但没有配 key —— 这次不会真转写。设置后重跑：`);
   console.log('  Windows PowerShell:  $env:' + asrCfg.keyEnv + ' = "sk-..."');
   console.log('  Git Bash / WSL:      export ' + asrCfg.keyEnv + '=sk-...');
-  console.log('可选：DSH_ASR_BASE_URL / DSH_ASR_MODEL / DSH_ASR_LANG（默认 zh）');
+  console.log('可选：VIDEO_STORYBOARD_ASR_BASE_URL / VIDEO_STORYBOARD_ASR_MODEL / VIDEO_STORYBOARD_ASR_LANG（默认 zh）');
   console.log('      自建 funasr-server 也可以，只要它兼容 OpenAI 的 /audio/transcriptions。');
   process.exit(1);
 }
 if (!apiKey) {
-  console.log('[asr] 本机地址，不需要 key（和 video_storyboard 同一判据）');
+  console.log('[asr] 本机地址，不需要 key（和 storyboard 命令同一判据）');
 }
 
 // 2.5) 本地托管的服务可能要临时拉起（只有 asr.json 配了 manage.start 才会）
@@ -75,7 +74,7 @@ try {
   asrLife = await ensureAsr({ baseUrl: asrCfg.baseUrl, config: asrCfg });
   if (asrLife?.started) console.log('[asr] 已按 manage.start 拉起本机服务');
 } catch (e) {
-  if (process.env.DSH_ASR_DEBUG) console.error('[asr-lifecycle]', e?.message ?? e);
+  if ((process.env.VIDEO_STORYBOARD_ASR_DEBUG || process.env.DSH_ASR_DEBUG)) console.error('[asr-lifecycle]', e?.message ?? e);
 }
 
 // 3) 真调一次
@@ -95,7 +94,7 @@ try {
   console.error(`\n[asr] 请求失败：${explainFetchError(error).slice(0, 400)}`);
   if (/ECONNREFUSED|ENOTFOUND|fetch failed/i.test(String(error?.message ?? error) + String(error?.cause?.code ?? ''))) {
     console.error(`      ${asrCfg.baseUrl} 上没有服务在听。本机服务先跑 start-asr.cmd，`);
-    console.error('      或在 ~/.dsh/asr.json 里配 manage.start，让插件按需拉起。');
+    console.error('      或在 asr.json 里配 manage.start，让工具按需拉起（路径见 node bin/doctor.mjs）。');
   }
   process.exit(1);
 } finally {

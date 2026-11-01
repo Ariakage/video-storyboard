@@ -142,7 +142,7 @@ async function main() {
   if (isUrl) {
     const got = await resolveInput(input, {
       ffmpegPath: opt.ffmpeg,
-      // 0 = 不指定，用 ~/.dsh/video.json 的 scanHeight（默认 360）
+      // 0 = 不指定，用 video.json 的 scanHeight（默认 360）
       ...(opt.height > 0 ? { scanHeight: opt.height } : {}),
       onProgress: process.stderr.isTTY ? ({ phase, bytes }) => {
         if (phase === 'done' || !bytes) return;

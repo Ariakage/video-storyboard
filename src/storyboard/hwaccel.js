@@ -24,6 +24,8 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 
+import { readEnv } from './config.js';
+
 /** 探测顺序：NVDEC 优先（AV1/HEVC 支持最全、实测最快），D3D11VA 兜底（Intel/AMD） */
 export const HWACCELS = ['cuda', 'd3d11va'];
 
@@ -31,7 +33,7 @@ export const HWACCELS = ['cuda', 'd3d11va'];
 const probeCache = new Map();
 
 function explicitChoice(env) {
-  const raw = String(env.DSH_HWACCEL ?? '').trim().toLowerCase();
+  const raw = String(readEnv('hwaccel', env) ?? '').trim().toLowerCase();
   if (!raw) return null;
   if (raw === 'none' || raw === 'off' || raw === '0' || raw === 'false') return { hwaccel: null, forced: true };
   if (HWACCELS.includes(raw)) return { hwaccel: raw, forced: true };
@@ -48,8 +50,8 @@ function explicitChoice(env) {
 export async function resolveHwaccel({ ffmpegPath, input, env = process.env, timeoutMs = 8000 }) {
   const choice = explicitChoice(env);
   if (choice?.forced) return choice.hwaccel;
-  if (env.DSH_HWACCEL_UNKNOWN && choice?.unknown) {
-    process.stderr.write(`[hwaccel] unknown DSH_HWACCEL=${choice.unknown}，按自动探测处理\n`);
+  if (readEnv('hwaccelUnknownWarning', env) && choice?.unknown) {
+    process.stderr.write(`[hwaccel] unknown VIDEO_STORYBOARD_HWACCEL=${choice.unknown}，按自动探测处理\n`);
   }
 
   const key = `${ffmpegPath}|${input}`;

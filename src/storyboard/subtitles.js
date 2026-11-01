@@ -35,11 +35,10 @@ const run = (bin, args, opts) => new Promise((resolve) => {
  * @returns {Promise<{ok:true, segments:Array, lang:string, file:string}
  *   | {ok:false, reason:'no-ytdlp'|'needs-login'|'no-subs'|'failed', detail?:string}>}
  */
-/** 没显式给 cookies 时，从 ~/.dsh/video.json 里读（和端口配置同一个文件） */
+/** 没显式给 cookies 时，从 video.json 里读（和端口配置同一个文件） */
 function configuredCookies(env = process.env) {
-  const home = env.DSH_HOME || join(env.USERPROFILE || env.HOME || homedir(), '.dsh');
   try {
-    const cfg = JSON.parse(readFileSync(join(home, 'video.json'), 'utf8'));
+    const cfg = JSON.parse(readFileSync(configPath(VIDEO_CONFIG_FILE, env), 'utf8'));
     if (typeof cfg?.cookies === 'string' && existsSync(cfg.cookies)) return cfg.cookies;
   } catch { /* 没配就算了 */ }
   return null;

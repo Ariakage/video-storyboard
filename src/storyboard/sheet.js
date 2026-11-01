@@ -478,7 +478,7 @@ export async function extractFrameRaw(opts) {
 /**
  * 把 rawvideo 画布编码成 **PNG 字节**（内存里，不落盘）。
  *
- * 宿主 `ctx.attachments.saveImage()` 会**解码**校验传入字节，所以必须给真正的
+ * 编码器会**解码**校验传入字节，所以必须给真正的
  * PNG，不能给 raw RGB（媒体类型写 image/png 但内容是裸像素 → "Unsupported or malformed image data"）。
  */
 export async function encodePngBuffer(buffer, width, height, opts = {}) {

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { solve, toRects } from '../src/storyboard/pack.js';
 import { BACKGROUND, blit, drawBadge, drawBadgePlain, fillRect } from '../src/storyboard/sheet.js';
 
-const FF = process.env.DSH_FFMPEG_PATH || 'ffmpeg';
+const FF = (process.env.VIDEO_STORYBOARD_FFMPEG_PATH || process.env.DSH_FFMPEG_PATH) || 'ffmpeg';
 const OUT = join(process.cwd(), 'out-packed');
 const DIR = 'D:/deepseek/3-Life/20.2_关键帧';
 const ASPECT = 16 / 9;
