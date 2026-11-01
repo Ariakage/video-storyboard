@@ -1,14 +1,40 @@
-# video-storyboard · Agent Skill
+# video-storyboard
 
-> 让 AI 真正"看过"一段视频：**一张可引用的分镜图 + 一份带时间码的文本清单**，模型据此回答
-> "第 3 分钟发生了什么""这句话对应哪一格"。
->
+[![test](https://github.com/Ariakage/dsh-video-storyboard/actions/workflows/test.yml/badge.svg)](https://github.com/Ariakage/dsh-video-storyboard/actions/workflows/test.yml)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](package.json)
+
+**把视频变成 AI 可引用的分镜图。** 输入一段视频，输出一张（或几张）宫格图 + 一份带时间码的
+文本清单：一格 = 一个镜头，格子大小 = 那个位置的剪辑速度。模型因此可以引用
+「第 7 格，00:12.76–00:31.40」，也可以按时间码要求放大某一段。
+
+这不是插件，而是一个**通用 Agent Skill**：`SKILL.md` + `bin/` 下的 Node 命令行。
+Claude Code、Codex、Cursor、任何能跑 shell 并读取图片的 agent 都能用。
+
 > English: [README.en.md](README.en.md) · 技能入口：[SKILL.md](SKILL.md) · 参数全表：[references/cli.md](references/cli.md)
 
-这是一个**通用 Agent Skill**：不依赖任何宿主插件系统，靠 `SKILL.md` + `bin/` 下的
-Node 命令行工作。Claude Code、Codex、Cursor、任何能跑 shell 并读取图片的 agent 都能用。
+## 30 秒上手
 
----
+```bash
+git clone https://github.com/Ariakage/dsh-video-storyboard.git
+cd dsh-video-storyboard
+node scripts/install-skill.mjs        # 装到 ~/.claude/skills/video-storyboard
+node bin/doctor.mjs                   # 检查 ffmpeg / yt-dlp / ASR
+
+# 出第一张图 + 文本清单
+node bin/storyboard.mjs "video.mp4" --out sheet.png --text
+```
+
+拿到的东西长这样：
+
+```text
+<storyboard duration="299.40" window="0.00-299.40" grid="74 frames on 3 image(s)" ...>
+cell 1 = 00:00.00-00:33.10  k=1 (1/1)  cuts 0
+cell 2 = 00:33.10-00:36.42  k=2 (1/2)  cuts 3
+    "这句话就在这一格里"
+```
+
+`k` 是档位，格子边长 = 1/k。长镜头占大格，快闪占小格，所以一张图里能同时看到两种节奏。
 
 ## 它解决什么问题
 
@@ -26,18 +52,16 @@ Node 命令行工作。Claude Code、Codex、Cursor、任何能跑 shell 并读�
 
 ## 安装
 
+上面的「30 秒上手」已经装了一份副本。其他方式：
+
 ```bash
-git clone https://github.com/Ariakage/dsh-video-storyboard.git
-cd dsh-video-storyboard
-
-node scripts/install-skill.mjs            # 复制到 ~/.claude/skills/video-storyboard
-# node scripts/install-skill.mjs --link   # 或者软链（改代码立即生效）
-# node scripts/install-skill.mjs --dest DIR   # 装到别的 skills 目录
-
-node bin/doctor.mjs                        # 检查 ffmpeg / yt-dlp / ASR / 缓存目录
+node scripts/install-skill.mjs --link          # 软链，改代码立即生效
+node scripts/install-skill.mjs --dest DIR      # 装到别的 skills 目录
+node scripts/install-skill.mjs --check         # 看装没装、装在哪
+node scripts/install-skill.mjs --remove        # 卸载
 ```
 
-装完重开 agent 会话，让技能索引重新加载。
+装完重开 agent 会话，让技能索引重新加载。也可以不装 Skill，直接在仓库里跑 `node bin/...`。
 
 **依赖：**
 

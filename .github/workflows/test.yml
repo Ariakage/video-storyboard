@@ -35,8 +35,7 @@ jobs:
           ffmpeg -version | head -1
 
       - name: syntax check
-        run: for f in src/*.js bin/*.mjs scripts/*.mjs; do node --check "$f"; done
+        run: node scripts/check-syntax.mjs
 
       - name: unit + e2e tests
         run: npm test
-        # test/contract.test.mjs self-skips when no local DSH install is present.

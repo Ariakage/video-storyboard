@@ -1,12 +1,38 @@
-# video-storyboard · Agent Skill
+# video-storyboard
 
-> Make a video legible to a text-only model: **one citable storyboard image + one timestamped
-> text index**. The model can say "cell 7, 00:12.76–00:31.40" instead of guessing.
+[![test](https://github.com/Ariakage/dsh-video-storyboard/actions/workflows/test.yml/badge.svg)](https://github.com/Ariakage/dsh-video-storyboard/actions/workflows/test.yml)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](package.json)
 
-A **generic Agent Skill** — no host plugin system. It is `SKILL.md` plus plain Node CLIs under
-`bin/`, so Claude Code, Codex, Cursor, or any agent that can run a shell and read images can use it.
+**Turn a video into citable storyboard images.** Feed in footage, get a few grid images plus a
+timestamped text index: one cell = one shot, and the cell size encodes how fast that stretch cuts.
+The model can cite "cell 7, 00:12.76–00:31.40" instead of guessing.
+
+A **generic Agent Skill** — `SKILL.md` plus plain Node CLIs under `bin/` — so Claude Code, Codex,
+Cursor, or any agent that can run a shell and read images can use it.
 
 [中文说明](README.md) · Skill entry: [SKILL.md](SKILL.md) · Full CLI reference: [references/cli.md](references/cli.md)
+
+## 30-second start
+
+```bash
+git clone https://github.com/Ariakage/dsh-video-storyboard.git
+cd dsh-video-storyboard
+node scripts/install-skill.mjs        # install to ~/.claude/skills/video-storyboard
+node bin/doctor.mjs                   # check ffmpeg / yt-dlp / ASR
+
+node bin/storyboard.mjs "video.mp4" --out sheet.png --text
+```
+
+You get a grid image plus an index like:
+
+```text
+cell 1 = 00:00.00-00:33.10  k=1 (1/1)  cuts 0
+cell 2 = 00:33.10-00:36.42  k=2 (1/2)  cuts 3
+    "the line spoken in this cell"
+```
+
+`k` is the tier: cell side = 1/k. Long takes get big cells, flash cuts get small ones.
 
 ## What it solves
 
@@ -21,18 +47,17 @@ a number.
 
 ## Install
 
+The 30-second start above already installs a copy. Other options:
+
 ```bash
-git clone https://github.com/Ariakage/dsh-video-storyboard.git
-cd dsh-video-storyboard
-
-node scripts/install-skill.mjs              # copy to ~/.claude/skills/video-storyboard
-# node scripts/install-skill.mjs --link     # or symlink (edits apply immediately)
-# node scripts/install-skill.mjs --dest DIR # another skills root
-
-node bin/doctor.mjs                          # ffmpeg / yt-dlp / ASR / cache check
+node scripts/install-skill.mjs --link          # symlink; edits apply immediately
+node scripts/install-skill.mjs --dest DIR      # another skills root
+node scripts/install-skill.mjs --check         # where is it installed?
+node scripts/install-skill.mjs --remove        # uninstall
 ```
 
-Restart the agent session so the skill index reloads.
+Restart the agent session so the skill index reloads. You can also skip the skill entirely
+and run `node bin/...` from the repo.
 
 **Requirements:** Node ≥ 20 and `ffmpeg` + `ffprobe` on `PATH`. `yt-dlp` is optional (URLs only).
 ASR / a transcript file is optional (dialogue lines). Nothing is bundled.
