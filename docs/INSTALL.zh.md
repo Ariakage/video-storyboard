@@ -44,7 +44,7 @@ node scripts/install-skill.mjs
 
 ```bash
 node scripts/install-skill.mjs --link          # 软链，改代码立即生效
-node scripts/install-skill.mjs --dest DIR      # 换一个 skills 根目录
+node scripts/install-skill.mjs --dest DIR      # 换一个 skills 根目录（如 ~/.agents/skills）
 node scripts/install-skill.mjs --check         # 看装没装、装在哪
 node scripts/install-skill.mjs --remove        # 卸载
 ```

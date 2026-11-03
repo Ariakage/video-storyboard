@@ -43,7 +43,7 @@ cell 2 = 00:33.10-00:36.42  k=2 (1/2)  cuts 3
 - **逐帧抽图** —— 10 分钟片子按 1 fps 抽就是 600 张图，token 直接爆。
 - **只喂字幕** —— 画面里的信息（构图、动作、场景变化）全丢。
 
-本 Skill 走第三条：**把画面压成一张宫格图**（384 token 封顶），旁边配一份**按时间对齐的文本清单**
+本 Skill 走第三条：**把画面压成一张宫格图**（默认 800×450 ≈ 233 token/张，封顶 ≈994），旁边配一份**按时间对齐的文本清单**
 （每格起止时间 + 这一格里的台词 + 切了几刀）。模型得到的是"这 90 秒里发生了什么、大概在第几秒"，
 需要细节时再用 `zoom` 放大某一段。
 
@@ -56,7 +56,7 @@ cell 2 = 00:33.10-00:36.42  k=2 (1/2)  cuts 3
 
 ```bash
 node scripts/install-skill.mjs --link          # 软链，改代码立即生效
-node scripts/install-skill.mjs --dest DIR      # 装到别的 skills 目录
+node scripts/install-skill.mjs --dest DIR      # 装到别的 skills 目录（如 ~/.agents/skills）
 node scripts/install-skill.mjs --check         # 看装没装、装在哪
 node scripts/install-skill.mjs --remove        # 卸载
 ```
@@ -112,7 +112,7 @@ node bin/subtitles.mjs "video.mp4" --max-strips 24 --step 3 --out strip.jpg --js
 
 ## 档位：格子为什么大小不一样
 
-一张图 800×800、384 token 封顶，格子越小能塞的帧越多 —— 所以"这一帧占多大"本身就是信息量分配。
+一张图默认 800×450（≈233 token）；画布可以抬到 1300×1300（≈994 token），格子越小能塞的帧越多 —— 所以"这一帧占多大"本身就是信息量分配。
 
 | 档位 | 格子边长 | 800 宽画布上的实际像素 | 典型场景 |
 |---|---|---|---|
@@ -129,18 +129,27 @@ node bin/storyboard.mjs video.mp4 --strategy saver                    # 旧名�
 node bin/storyboard.mjs video.mp4 --tier-map '{"5":4,"6":4,"7":4,"8":4}'   # 5–8 档一律 1/4
 ```
 
-### 五个档位
+### 六个档位（第一个是默认）
 
 | `strategy` | 每帧多大 | 90 秒 PV 实测 | 什么时候用 |
 |---|---|---|---|
-| `full` | 升一档（1 档不再升） | 18 张 / 6912 token | 要读画面里的字、认脸 |
-| `standard` | 1 档压成 1/2 | 5 张 / 1920 | 想看清每个镜头 |
-| **`compact`（默认）** | 降一档 | **3 张 / 1152** | 日常：看得清又便宜 |
-| `skim` | 全部 1/8，无假切点，切点按 0.35 s 合并 | 1 张 / 384 | 一条 PV 一张图 |
-| `brief` | 全 1/8，切点间隔自适应到整段装进一张图 | 1 张 / 384 | 5 分钟视频一张图看完 |
+| **`auto`（默认）** | 按时长定张数（≈4 分钟一张），再挑最小格还认得出的最省档 | 1–3 张 / ~233–700 token | 什么都不填时用它 |
+| `full` | 升一档（1 档不再升） | 18 张 / ~4.2k token | 要读画面里的字、认脸 |
+| `standard` | 1 档压成 1/2 | 5 张 / ~1.2k token | 想看清每个镜头 |
+| `compact` | 降一档 | 3 张 / ~700 token | 日常：看得清又便宜 |
+| `skim` | 全部 1/8，无假切点，切点按 0.35 s 合并 | 1 张 / ~233 token | 一条 PV 一张图 |
+| `brief` | 全 1/8，切点间隔自适应到整段装进一张图 | 1 张 / ~233 token | 5 分钟视频一张图看完 |
 
+token 按默认 800×450 的 ≈233/张估算；画布可以抬到 1300×1300（≈994/张），实际值会写进清单。
+`auto` 可以用 `VIDEO_STORYBOARD_AUTO=0` 关掉，退回 `compact`。
 旧名 `quality` / `balanced` / `saver` / `frugal` / `thrifty` / `ultra` 仍然认，会自动映射，不会报错。
 档位与实测成本详见 [references/strategy.md](references/strategy.md)。
+
+不知道会出几张图时，先预演（扫描有缓存，第二次几乎免费）：
+
+```bash
+node bin/storyboard.mjs video.mp4 --dry-run
+```
 
 ## 长视频怎么读
 
@@ -202,7 +211,10 @@ ASR 是可选配置。默认读 `~/.video-storyboard/asr.json`（旧的 `~/.dsh/
 | `VIDEO_STORYBOARD_FFMPEG_PATH` | `DSH_FFMPEG_PATH` | ffmpeg 可执行文件 |
 | `VIDEO_STORYBOARD_FFPROBE_PATH` | `DSH_FFPROBE_PATH` | ffprobe |
 | `VIDEO_STORYBOARD_YTDLP` | `DSH_YTDLP_PATH` | yt-dlp |
-| `VIDEO_STORYBOARD_ASR_*` | `DSH_ASR_*` | ASR 端点/模型/key/热词 |
+| `VIDEO_STORYBOARD_ASR_*` | `DSH_ASR_*` | ASR 端点/模型/key/热词/开关 |
+| `VIDEO_STORYBOARD_AUTO` | `DSH_STORYBOARD_AUTO` | 设为 `0` 关掉 auto 选档 |
+| `VIDEO_STORYBOARD_SECONDS_PER_IMAGE` | `DSH_STORYBOARD_SECONDS_PER_IMAGE` | auto 的时长预算（默认 240 秒/张） |
+| `VIDEO_STORYBOARD_IMAGE_TOKEN_CAP` | `DSH_IMAGE_TOKEN_CAP` | 覆盖单图 token 封顶（默认 1024） |
 
 缓存默认在 `~/.cache/video-storyboard`（Windows：`%LOCALAPPDATA%\video-storyboard`），有容量上限并自动淘汰。
 

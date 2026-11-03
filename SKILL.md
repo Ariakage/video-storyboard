@@ -55,7 +55,7 @@ on `cd` or variables from a previous shell call.
    The text index is in `.text` (and on stdout when you omit `--json`).
 
 3. **Look at the images.** Call the Read tool on **every** path in `sheets[].path`, in order.
-   A sheet is ~384 vision tokens; read the image *and* its `[sheet]`/`cell` index together —
+   A sheet is ~233 vision tokens at the default 800×450 canvas (up to ~994 at 1300×1300); read the image *and* its `[sheet]`/`cell` index together —
    the image shows composition, the index gives exact time ranges.
 
 4. **Go deeper only where it matters.**
@@ -86,17 +86,20 @@ There are only three knobs that change the picture; everything else has a sane d
 
 | Situation | Command |
 |---|---|
-| Short clip (≤ ~3 min), normal reading | default `strategy=compact` |
+| Short clip (≤ ~3 min), normal reading | default (`strategy=auto`) |
 | Need to read signs/faces in the overview | `--strategy full` (more images, sharper) |
 | One wide look at a long film, spoilers OK | `--max-frames 96` |
 | Watch a long film in order (no spoilers) | `--from 0 --segment 300`, follow `next: from=...` |
 | Bulk windows for a 2-hour film | `--batch 300 --out "$OUT/film.png"` (writes a timeline table) |
 | Hard cap on images | `--max-sheets 4` |
 | Cheap one-image skim | `--strategy skim` or `--strategy brief` |
+| Preview image counts without rendering | `--dry-run` |
 | Precise tier override | `--tier-map '{"5":4,"6":4,"7":4,"8":4}'` |
 
-`strategy`: `full` (one tier bigger per frame) → `standard` → **`compact` (default)** →
-`skim` (all 1/8, one image) → `brief` (adaptive gaps, whole clip in one image). Old names
+`strategy`: **`auto` (default)** picks an image count from duration (~4 min/image) and the
+cheapest tier whose smallest cell stays readable → `full` (one tier bigger per frame) →
+`standard` → `compact` → `skim` (all 1/8, one image) → `brief` (adaptive gaps, whole clip in
+one image). Disable auto with `VIDEO_STORYBOARD_AUTO=0` to fall back to `compact`. Old names
 `quality/balanced/saver/frugal/thrifty/ultra` are still accepted.
 
 `--cell-range 12-20` paginates the text index; `--detail low|med|high` sets characters of

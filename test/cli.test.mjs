@@ -48,7 +48,9 @@ test('CLI: probe --json 返回可解析的容器信息', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'vs-cli-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = await makeFixture(dir);
-  const { stdout } = await cli('probe.mjs', [file, '--json']);
+  const { stdout } = await cli('probe.mjs', [file, '--json'], {
+    env: { ...process.env, VIDEO_STORYBOARD_CACHE_DIR: join(dir, 'cache') },
+  });
   const info = JSON.parse(stdout);
   assert.equal(info.kind, 'file');
   assert.ok(info.duration >= 5.9 && info.duration <= 6.1);
@@ -63,9 +65,10 @@ test('CLI: storyboard --json 出图 + 文本清单，zoom --cell-id 复用格子
   const file = await makeFixture(dir);
   const out = join(dir, 'sheet.png');
 
+  const env = { ...process.env, VIDEO_STORYBOARD_CACHE_DIR: join(dir, 'cache') };
   const { stdout, stderr } = await cli('storyboard.mjs', [
     file, '--frames', '4', '--out', out, '--text', '--json',
-  ]);
+  ], { env });
   // stdout 必须是纯 JSON；进度行只能在 stderr
   const payload = JSON.parse(stdout);
   assert.match(stderr, /\[scan\]|\[plan\]/);
@@ -80,7 +83,7 @@ test('CLI: storyboard --json 出图 + 文本清单，zoom --cell-id 复用格子
   const zoomOut = join(dir, 'zoom.png');
   const zoom = JSON.parse((await cli('zoom.mjs', [
     file, '--cell-id', '1', '--frames', '4', '--out', zoomOut, '--json',
-  ])).stdout);
+  ], { env })).stdout);
   assert.ok(zoom.window.to > zoom.window.from);
   assert.ok(existsSync(zoomOut));
   const jpg = await readFile(zoomOut);
@@ -98,7 +101,9 @@ test('CLI: locate 用 transcript 文件定位，不碰 ASR', async (t) => {
     '2', '00:00:03,000 --> 00:00:04,000', 'second line about memory', '',
   ].join('\n'), 'utf8');
 
-  const { stdout } = await cli('locate.mjs', [file, 'memory', '--transcript-file', srt, '--json']);
+  const { stdout } = await cli('locate.mjs', [file, 'memory', '--transcript-file', srt, '--json'], {
+    env: { ...process.env, VIDEO_STORYBOARD_CACHE_DIR: join(dir, 'cache') },
+  });
   const found = JSON.parse(stdout);
   assert.equal(found.matches.length, 1);
   assert.equal(found.matches[0].from, 3);
@@ -113,7 +118,7 @@ test('CLI: subtitles 裁出竖长图并给时间码', async (t) => {
   const out = join(dir, 'strip.jpg');
   const { stdout } = await cli('subtitles.mjs', [
     file, '--max-strips', '3', '--step', '2', '--out', out, '--json',
-  ]);
+  ], { env: { ...process.env, VIDEO_STORYBOARD_CACHE_DIR: join(dir, 'cache') } });
   const payload = JSON.parse(stdout);
   assert.equal(payload.image, out);
   assert.equal(payload.strips.length, 3);

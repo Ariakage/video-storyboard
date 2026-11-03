@@ -13,7 +13,7 @@
  */
 
 // ---- 主流程：跑一次分镜，拿到宫格图 + 清单
-export { runStoryboard, formatManifest } from './pipeline.js';
+export { runStoryboard, formatManifest, formatPlanPreview } from './pipeline.js';
 
 // ---- 扫描：逐帧分数、切点、以及逐帧的亮度均值与 16×9 指纹
 export { scanShots, decideCuts, scanSummary, refineCutsByWindow } from './scan.js';
@@ -30,7 +30,7 @@ export { tagCuts, flashEvidence } from './flash.js';
 // ---- 档位：切点密度 → 1..8 档（格子边长 1/k）、积分取帧、升降档策略
 export {
   LEVEL_THRESHOLDS, HYSTERESIS, TIER_MIN, TIER_MAX, STRATEGIES, STRATEGY_NAMES,
-  DEFAULT_STRATEGY, applyStrategy, fitCanvas, framesFromBounds, integralMarks, levelAt,
+  DEFAULT_STRATEGY, applyStrategy, fitCanvas, framesFromBounds, imageTokens, integralMarks, levelAt,
   levelCurve, readabilityOf, tierHistogram, tierSizes, tierSide,
 } from './tiers.js';
 

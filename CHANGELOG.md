@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.1.0] - 2026-11-03
+
+> **同步上游 0.6.1–0.6.4**（SAOS-3624/dsh-video-storyboard）到通用 Skill 分支。
+> 上游的 DSH 插件层（设置页、宿主 speechToText 注册、tool schema）没有带过来；
+> 核心管线、清单、排布、token 计费与 CLI 改进全部合入。
+
+### 合入的上游改进
+
+- **图片 token 按宿主 patch 网格计算**：新增 `tiers.imageTokens()`；800×450 ≈ **233 token**
+  （旧值 384 虚高），画布上限放宽到 **1300×1300 / 单张 1024 token**，默认预算改 **360k**。
+- **`strategy: auto` 成为默认**：按时长定张数，三档代价写进清单；新增 `squeezeTiers()`，
+  压张数先压档位再减帧，`--max-sheets 1` 不再退化成 1 帧。
+- **积分取帧阈值改成绝对值**（`INTEGRAL_REF_SCORE × fps × equivSeconds`），不再随画面变化率自我抵消。
+- **清单瘦身**：同一句话跨格只印一次、整窗同档只写一行 `k=`、头部散文压缩；
+  新增 `formatPlanPreview()` 与 `--dry-run`（只报切点数与各档张数，不出图）。
+- **可读性告警重写**：小格子明确提示"你是在猜"，并给出 zoom → compact/standard → full 的顺序。
+- **排布修复**：混合档位同一行按取整后的上边缘分组，修 1px 重叠。
+- **zoom/陪看复用已落盘副本**，不再为一个兜底文件重下整片。
+- **CLI 未知开关告警**（`--cells`/`--sheets` 这类旧写法不再静默忽略）。
+- 新增 `scripts/reference-server-sherpa.py`（本机 ASR 参考实现）与
+  `scripts/verify-image-tokens.mjs`（与宿主 23 组尺寸逐值对拍）。
+- 保留可选的宿主 speechToText 桥（`src/storyboard/host-asr.js`）；CLI/无宿主时行为不变。
+
+### 保留的 Skill 层
+
+- `SKILL.md`、`references/`、`bin/probe|storyboard|zoom|locate|subtitles`、
+  `scripts/install-skill.mjs`、中立配置命名与 `VIDEO_STORYBOARD_*` 环境变量全部保留。
+- 未合入：`src/settings/*`、`lib/client.js`、`src/index.js`、`src/tools/*`、
+  `src/storyboard/tool-spec.js`、插件清单与设置页测试。
+
 ## [1.0.0] - 2026-11-01
 
 > **破坏性变更**：项目从 DeepSeek Harness 插件改成通用 Agent Skill。宿主插件层移除，
@@ -42,6 +72,307 @@
 
 - 管线现在把本次转写交给 `rememberSegments()`，同进程的 locate 不再白跑一次 ASR。
 - `formatMatches` 的提示改为命令行说法，不再指向已不存在的 `video_zoom` 工具。
+
+## [0.6.4] - 2026-11-02
+
+> 主题：**再把"每轮重发"的钱刮一遍**。0.6.1 把 schema 从 22.8k 压到 11.8k，
+> 但还有三处漏网：清单头部每次调用都重印的散文、设置页工具（它也是 schema，
+> 守门却只称五个工具）、以及"六工具合计"从来没被断言过。
+
+### Changed
+
+- **清单头部的说明性散文压短**（4 段，句子结构不动、事实一个不删）：
+  `badges:` 从三句变一句（仍是"为什么跳号 / 它们是真帧 / 按格号引用"），
+  多张图那条改成 `${n} sheets = n separate windows, not one strip`，
+  `footer strip shares the timeline:` → `footer:`（图例含义不变），
+  档位对照从 `same window under the other policies:` 改 `other policies:`，
+  并保留 `**"full" is the expensive one, not the fuller one**` —— 这句是防"选 full"的唯一提示。
+  实测（沧野 5 分钟窗 / 18 格 / 2 张 / 真字幕）：**5,592 → 5,275 字符**，头部 2,080 → 1,763。
+  剩下的 33% 头部全是事实（路径、档位分布、最小格、fill、单价），不再动。
+- **设置页工具的描述**删掉"Web GUI 里也有一份同样的设置页"这类**给人看**的话，
+  648 → **456 字符**。契约抽成 `settingsToolSpec()`（`src/settings/server.js` 导出），
+  只为让测试称得出它 —— 建工具对象要 webServer，测试里造不出来。
+
+### Fixed
+
+- **体积守门漏了第六个工具**：断言只加五个视频工具（<13,500），
+  而桌面版（有 webServer）每轮实际发六个。现在五工具 <12,500、**六工具 <13,000** 都锁住，
+  当前实测 **11,777 / 12,233**。
+
+## [0.6.3] - 2026-11-02
+
+> 主题：**把"能用但用不了"的三处修掉** —— 宿主 ASR 拒收音频、zoom 不接宿主 ASR、zoom 为一个
+> 兜底文件重下整片。顺手把 0.6.2 之后只落在 main 上的 CLI 与文档改动一起发出去。
+> **基线一处没动**：`strategy:"auto"` 的默认代价、`pack.solve` 的排布口径、图片 token 换算
+> 都还是 0.6.2 的，接着提的 PR 可以照旧直接落。
+
+### Fixed
+
+- **宿主 `speechToText` 交出去的音频不是宿主认的 WAV**（@大肥鱼 2026-11-02 实报，macOS 26 / Apple
+  Silicon）—— 启用 Voice Input（SenseVoice）后，任何带人声的视频都得到
+  `transcript="asr-failed"`，理由只有一句 `ASR call failed`。真因是 `-f wav -` 走管道：
+  `RIFF size` / `data size` 回填不了（`0xFFFFFFFF`），ffmpeg 还默认塞一个 `LIST/INFO` 把 `data`
+  从偏移 36 顶到 70。宿主的 `validateWave()` 逐字节认死「`RIFF size === len-8`、`data` 在
+  **36**、`data size === len-44`」，三条全灭。
+  **不是 macOS 专有**：同一份代码也在 Windows 包里，只是用 asr.json/HTTP 端点时走不到这条路。
+  修法是在内存里重写头（`canonicalizeWav()`：按 chunk 走一遍、只留 `fmt ` + `data`、重算长度），
+  **不写临时文件**——管道拿不到的长度我们自己会算，win/mac 同一套、零额外 I/O。
+  结构认不出来就明确抛错，不再静默跳过一整段台词。
+  `test/host-asr.test.mjs` 把宿主的 `validateWave()` 逐条复刻成断言，这个坑不会再回来。
+- **`video_zoom` 不接宿主 ASR** —— 它自己直调 `runStoryboard()`，绕过了 `shared.js` 的
+  `runWithHost()`，于是同一个文件「分镜能转写、放大变 `no-key`」。两个入口现在共用
+  `runWithHost()`，以后再有第三个入口也接同一个口子。
+- **`video_zoom` 读链接时会为一个"只用来兜底"的本地文件重新下载** —— 缓存键是
+  `mediaKey(url, height)`，而分镜落盘用 720/480、zoom 和陪看用 360，于是「先分镜再 zoom」
+  必然 miss 一次：整片就在隔壁目录里，却要重新解析（2.4 s）+ 重新下载，而这条重下对匿名高清源
+  就是 `HTTP Error 503`（同一位用户实报，从 macOS 跟到 Windows 都会）。现在 `fetchMedia` 支持
+  `reuseCached`：键 miss 时找同一链接**已经落过盘的别的清晰度副本**（优先"不比要的更低"里最矮的
+  那份），直接当本地副本用，**根本不去碰网络**。只给 zoom / 陪看开——分镜的本地副本就是产出源，
+  清晰度必须严格照参数走，**不许被复用悄悄换掉**。清单照实报 `scanned at 720p`。
+  另外 `explainYtdlpError` 补了 `HTTP Error 503` 的结论（签名直链过期 / 匿名高清被限流），
+  以前它只落到"最后三行原文"。
+  高清直链取帧失败回落本地副本本来就有一套（`frames.js` 的 `local-fallback`，
+  清单里有 "N cell(s) fell back to the low-resolution copy"），这次没动它。
+
+### Added
+
+- **CLI 遇到不认识的开关会当场说出来**（0.6 删了 `--cells` / `--sheets` / `--need`，外面的教程和
+  脚本还是老写法）。以前静默忽略，用户以为"参数生效了、只是效果不明显"；现在 stderr 会点名
+  `--cells`，并直接给出新写法（`--frames N` / `--strategy …` / 先 `--dry-run` 看代价）。
+  `bin/_args.mjs` 把未知项收进 `$unknown`，`bin/storyboard.mjs` 负责打印；`test/cli-args.test.mjs` 守着。
+
+### Changed
+
+- **安装文档规范化**（closes #68）：以 `dsh plugin --profile web add` 为主路径，桌面版单独说明
+  `install-dev`；`README` / `README.en` / `docs/INSTALL.zh.md` / `docs/USAGE*` 里 0.6 已删掉的
+  `--cells` 写法一并清掉，不再让新用户照着老命令试。
+- **清单措辞两处**（@大肥鱼 提，纯文本、无逻辑变化）：`→ L2` 这个标记现在写明「**这格有台词**，
+  就是上面列出的那句」，只有引号里空着才是真没声音——原来 legend 只说「读一次」，用户会以为
+  这些格子静音；格子太小时不再鼓励硬看，改成「**别从这种尺寸的格子描述人脸/道具/画面文字，
+  这个尺寸你是在猜**」，并按代价给出修法顺序（zoom → compact/standard → full）。
+
+### Docs
+
+- **FAQ 记下一条已知限制**（#70）：字幕轨本身可能是错的（平台 ASR 自动生成的经常错到离谱），
+  我们**不会**把它和画面硬字幕做交叉校验。`detail:"high"` 的 OCR 只校正命中的那一句、不并列两版；
+  真要核对就自己看一眼画面。交叉校验缺"什么算不一致"的判据与样本集，先不做。
+
+## [0.6.2] - 2026-11-01
+
+> 主题：**把社区提的 6 个 PR 收进来**（4 修 bug + 2 加功能），每个都先单独 rebase 到 0.6.1
+> 跑一遍、再合到一个集成分支上跑全量 494 条测试，最后才落到 main。
+> **基线一处没动**：`strategy:"auto"` 的默认代价、`pack.solve` 的排布口径、图片 token 换算
+> 都还是 0.6.1 的，接着提的 PR 可以照旧直接落。
+
+### Added
+
+- **插件设置页**（#60 / closes #59）—— DSH 设置页里直接渲染 ASR（baseUrl / model / language /
+  key / 开关）、浏览器端口与启动开关、依赖自检；同一套 API 也支撑一份独立 HTML 页
+  （`src/settings/server.js` 注册在宿主 `webServer` 上，页面 URL 带 32 字节随机 token）。
+  **key 只写不读**：`GET /state` 只回 `hasKey`，写入时空串表示保持原值。没有 `webServer` 的
+  CLI 宿主 `createSettingsPage()` 返回 `null`，工具数仍是 5 个、行为不变。
+  顺带把 `DSH_ASR_ENABLED=0` / `asr.json {"enabled":false}` 接进 `canTranscribe()` —— 以前这个
+  开关只影响解析、不影响实际门，关掉 ASR 得靠"没配 key"。
+- **宿主 `speechToText` 优先**（#58 / closes #57）—— 桌面版自带 SenseVoice 时，按窗口切 16k
+  单声道 WAV 直接交给宿主，不再要求 `asr.json` / 云端 key。宿主 provider 没有词级时间戳，
+  所以一块音频一条台词（`from`/`to` = 窗口边界）。缓存身份写 `asr2|host:speechToText|…`，
+  和云端 HTTP 的不串用。CLI / 其他宿主没有这个服务时**原样走旧路径**。
+- **`scripts/reference-server-sherpa.py`**（#62）—— 本机 ASR 服务端的最小参考实现（sherpa-onnx 2.x +
+  paraformer / ct-transformer / silero VAD，只依赖标准库 + numpy）。补上 `docs/CONFIG.zh.md` §7.1
+  「自己写」那条路缺的那份可对照代码：`--models` 目录内按已知文件名自动发现，也可逐个覆盖路径，
+  `--check` 只验模型能否加载。两条降级边界按文档口径实现 —— 标点加载或调用失败照常 200 + 不带标点的
+  文本，VAD 缺失或运行期出错退回整段一次识别。**`scripts/` 在 `files` 白名单里**，所以这个脚本
+  会跟着 npm 包一起发出（21 kB，实测 `npm pack` 里有它）—— 装完直接
+  `python scripts/reference-server-sherpa.py --check` 就能自检。
+  （初稿这里写成"不进 npm 包"，是照着 PR 描述抄的，@aizhimoran 核对后指正。）
+
+### Fixed
+
+- **混合档位同一行的 1px 重叠**（#67 / closes #66）—— `toRects()` 的水平取整修正按 `y + h`
+  给行分组，混合档位的一行里 0 档补位格和 1 档格高度不同会被拆成两组，左右边缘差 1px 就修不掉。
+  改成只按**取整后的上边缘**分组（和下面垂直那趟同一个口径），回归测试用 `[2,0,1,0,0,0]`。
+- **prefetch 不读内嵌字幕**（#56 / closes #55）—— `prefetchTranscript()` 在"没有站点 CC"之后
+  直接跳到 `canTranscribe()`，本地片明明带字幕轨、只要没配 ASR key 就报 `no-key`。
+  现在和 `resolveTranscript()` 同一级：站点 CC → **内嵌字幕** → 缓存 → ASR。
+  同时把 `cookies` 传给下载（以前只给站点 CC 用，登录片在 prefetch 里退成匿名请求）。
+
+### Closed without merge
+
+- **#54 / #63**（`saveImage` 丢 receiver）—— 0.6.0 已用 `saveImage.call(attachments, …)` 修好，
+  0.6.1 也在跑；两个 PR 的思路（`inject: { required, optional }`）等价，但会和 0.5.9 那次
+  "硬 inject 导致装插件卡死"的教训撞车，main 走的是 `ctx.get()` 探测 + `.call` 绑定。
+- **#65**（`rowOptions` 缓存键）—— 0.6.1 已经把键换成
+  `` `${tiers}|${grow}|${stretch}|${fillRows}` `` 字符串（#64），数值累乘会越界的问题一并解决。
+
+## [0.6.1] - 2026-11-01
+
+> 主题：**把"贵"这件事收回来**。起因是一次真实账单 —— 新会话看到一个 B 站视频，直接在
+> `strategy` 里选了 `full`（枚举第一个名字），90 秒的 PV 花了 6912 vision token，是 `compact` 的 6 倍；
+> 同一次会话里，`video_storyboard` 的**文字索引**还占掉了约四分之一，因为 21 个格子把同一句歌词
+> 各印了一遍。两处都不是模型犯傻，是工具没把代价说清楚。
+
+### 图片按像素计价：`800²/384` 换成宿主的 patch 网格（真值 233，不是 384，也不是 218）
+
+官方《图像理解 · Token 用量》改了口径：小于约 **544×544** 的图会被放大、更大的缩到总像素约相当于
+**1300×1300**、单张封顶 **1024**。我们一直用的 `800×800 = 640k = 384` 是**上一版**文档的数。
+
+**换算公式不是字节级公开的**，所以直接抄了宿主的实现（`@deepseek-ai/dsh-llm-deepseek` 的
+image-tokens 模块，服务端 v41 配置）：
+
+```
+14px patch 对齐（向上取整）→ 每轴 3:1 降采样 → 42px 一格
+tokens = rows × (cols + 1) + 2        # 每行一个分隔 token，外加 2 个框架 token
+```
+
+对出来的真值（`scripts/verify-image-tokens.mjs` 与宿主逐值对拍，23 组全一致）：
+
+| 尺寸 | 旧报数 | 「像素÷1650」估算 | **真值** |
+|---|---|---|---|
+| 800×450（默认画布） | 384 | 218 | **233** |
+| 1066×600（640k） | 384 | 388 | **407** |
+| 1280×720 | 384 | 559 | **578** |
+| 320×180…733×412（地板区间） | 384 | 179 | **192 一律** |
+| 1300×1300（上限） | 384 | 1024 | **994** |
+
+- 新增 `tiers.imageTokens(w, h)` —— **全仓库唯一一处**把尺寸换成钱的地方；清单的
+  `tokens=` / `cost:` / auto 对照 / `wide pass` / 预演 / `--plan` 全部改走它，按**每张图自己的尺寸**算。
+- 新增 `scripts/verify-image-tokens.mjs`：拿宿主的实现给我方打分（宿主升级后重跑就知道要不要跟）。
+- `MAX_CANVAS_SIDE` 800 → **1300**、`MAX_BUDGET` 640k → **1.69M**；`DEFAULT_BUDGET` 640k → **360k**
+  （16:9 仍是 800×450）。**默认输出与 0.6.0 逐像素相同**（同一素材 4 个策略对跑 PNG sha256 全 SAME），
+  变的只有账：以前"说要 640k、实际被单边 800 卡成 360k"，现在参数和结果对得上。
+- **地板抬升（P1）**：小于 544² 的预算一律抬到地板（16:9 → 725×408），因为计费按 544² 收 ——
+  画得更小一分钱不省、只会更糊。实测同一素材：`budget:120000` 出图从 462×274（182 tok）变成
+  725×419（192 tok），**+5% 的钱换 +140% 像素**；`budget:230000` 是 +5% 换 +28%。
+  抬过的预算会在清单里写明原值（`budget: you asked for 120000 px … ran at 295936 px`），不偷偷改。
+  地板档的抓帧高度也跟着给到 720p（否则抬了画布却拿 480p，等于白抬）。
+- `scanHeight` 阈值 400k → 300k，保证默认预算下仍是 720p 抓帧（否则换口径会把画质偷偷降到 480p）。
+- 分档算法（`levelCurve` 卷积）与升降档表（`STRATEGIES` / `applyStrategy`）**一行没动**。
+
+### `strategy: 'auto'` 成为默认（可关）
+
+- 新增 `autoSheetCap(duration)`：**张数只按时长算**，默认 240 s/张（`DSH_STORYBOARD_SECONDS_PER_IMAGE`
+  可调）。5 分钟 → 1~2 张，30 分钟 → 8 张，2.5 小时 → 39 张。同一时长的片子，钱是可预期的，
+  切点密度（3 刀 vs 300 刀）不再能让账单差一个数量级。
+- 新增 `pickAutoStrategy(variants)`：在 `compact / standard / full` 里挑"最小格 ≥ `shot`、张数又最少"
+  的那档；全都认不出时取最小格最大的。压缩到色块就翻倍张数重试（最多三轮）—— 预算让位于可读性。
+- 清单新增 `size policy: auto chose …` + 同一批帧在另外两档的真实张数，模型下一轮才有依据覆盖。
+- 关掉：`DSH_STORYBOARD_AUTO=0` 或 `~/.dsh/video.json` 的 `{"storyboard": {"auto": false}}` → 退回 `compact`。
+- `zoom` / 陪看不受影响（它们的默认仍是 `full` / `compact`，窗口本来就短）。
+
+### `dryRun: true`：先给切点数，再让模型选档
+
+只扫描（有缓存）+ 排布，**不出图、不取帧、不转写**，回报切点数、帧数、每个档位的张数与最小格
+尺寸，并给出推荐。这让"先看刀数再选档"变成一次几乎免费的文本调用，而不是靠猜。
+
+### 文本索引瘦身（同一句话不再印第二遍）
+
+- **跨格重复只印一次**：一句词横跨 21 格时，抽到 `shared speech` 段印一次，格子留 `→ L1` 引用。
+  实测同一份结果 5263 → 2010 字符（−62%，≈3680 → 1400 token）。
+- 一格内相邻重复的句子折叠成 `×n`（副歌循环不是三条信息）。
+- `lines` 路径原来**完全不受** `maxCellChars` 约束（一格 5 句就印 5 条完整台词），现在按整格预算收尾。
+- 整窗档位一致时用一行说明代替逐格的 `k=`（省 11 字符/格）。
+- 默认 `maxChars` 24k → 12k：64 格 `detail:"med"` 的完整清单正好装得下，超了才分页。
+
+### 修掉文案与实现不一致（这是选错档的直接原因）
+
+- `strategy` 的枚举是 `full/standard/compact/skim/brief`，描述却写着 `quality | balanced（默认）| saver |
+  frugal` —— 模型按描述找不到 `balanced`，就照着枚举第一个 `full` 填。现在描述与枚举一致，`auto` 排第一。
+- `maxSheets` 描述写"默认 8"，代码是 **0 = 不限**，已改正。
+- `validateZoomArgs` 只认旧名，**传 `full` 会被判非法参数**（schema 里给的正是新名），已修。
+- `probe` 文案里残留的 `cells:16` 改成 `maxFrames: 96`。
+
+### 积分取帧的阈值改成**绝对值**（原来等于等间隔抽样）
+
+`integralMarks` 的阈值原先是 `T = 全片平均每秒变化量 × equivSeconds`。画面动得越厉害，平均分越高，
+阈值跟着一起涨，两者抵消 —— 不管素材多快多慢，都是固定 `equivSeconds` 秒一个采样点。
+实测变化率从 2/s 到 64/s（差 32 倍），输出**恒为 19 个点、间隔恒为 6.0 秒**：
+积分就此退化成等间隔抽样，"动的快的地方多取帧"这个能力完全消失。段内的相对快慢当时是保留的
+（慢段 1 点 / 快段 18 点），丢的是**整段素材的快慢**。
+
+改成 `T = INTEGRAL_REF_SCORE(4) × fps × equivSeconds`，参考分标定自真实素材剔除真切点后的均分
+（慢动画 0.79 / 实拍 2.92 / 连续运动 3.37 / 快剪 4.75 / 缓慢渐变 7.33）：
+
+| 素材 | clean 均分 | 修复前 | 修复后 |
+|---|---|---|---|
+| demo（慢节奏动画） | 0.79 | 9 帧（假切点 4） | **8 帧（假切点 0）** |
+| hue40（缓慢渐变） | 7.33 | 4 帧（假切点 6） | **9 帧（假切点 12）** |
+| motion（连续运动） | 3.37 | 15 帧（假切点 3） | 14 帧（假切点 2） |
+
+参照：参考强度画面仍是 `equivSeconds` 秒一个点（语义没变），慢素材攒得更久、快素材攒得更快；
+静止画面永远攒不出来（0 个点）。**缓存不用清** —— 存的是扫描结果，积分点每次重算。
+
+同一条链路上其余阈值**已复核，没有这个问题**：`levelCurve` 用绝对密度阈值数组；
+`autoThreshold` 是分位数 + `floor 12` 兜底的预算制；`refineCutsByWindow` 的采纳门槛是绝对的 25；
+`spikeCuts` 用相对基线但**故意如此**（它找的就是"相对本片常态的尖峰"，另有 `minAbs` 兜底，
+且只在每秒不到 0.25 刀的极静素材上启用）。
+
+### 短视频不再比长片贵（`Math.max(2, …)` 拿掉）
+
+auto 压张数时写了 `const limit = Math.max(2, autoTargetCap)`，于是 25 秒的素材被硬抬成 2 张，
+2 张塞不下就按 `×2 / ×4` 逐级放宽，最后出了 4 张 —— **比 5 分钟的片子还贵**。
+按时长算出来是几张就是几张。同时修掉清单里的假话：90 秒以内的窗口原来无条件写
+`duration budget: … → **1 image**`，即使实际给了 4 张；现在 `relaxed` 存在时如实说明原因。
+
+### 假切点的格子再小一档（`MARK_BOOST` 2 → 3）
+
+假切点是"画面一直在变、攒够了才切"补出来的帧，没有硬边界，一帧代表不了多久。原来是 +2 档
+（1 档 → 1/3），按"尺寸再小一级"的要求提到 **+3**（1 档 → 1/4）。
+
+实测（40 秒纯渐变、0 真切点、一张图）：格子 **267×150 → 200×113**，同一张图从 9 帧变 **16 帧**，
+**张数与价格都不变**；有真切点的素材只影响假切点那几格（motion：1/5 → 1/6，fill 97.2% → 93.4%）。
+注意 boost 放大后一张图能装更多格，`fillGaps` 会顺带切几刀补满 —— 这是同一笔钱多看到几个瞬间，
+不是多花了钱。
+
+### 三个把画面吞掉的 bug（拿一条真实 36 分钟 B 站视频抓出来的）
+
+一条 5 分钟窗口、191 刀的素材，`--dry-run` 报"三档都是 1 张"，实跑只出 **1 帧**；
+而按不封顶真实代价是 full **59 张**。三个问题叠在一起：
+
+1. **`dryRun` 的代价全是假的**：`variants` 用 `built.raw` 算，而那份档位已经被张数预算压过，
+   于是 compact/standard/full 报同一个数（`1 image`）。模型拿它选档等于闭眼开车。
+   改成用**不封顶**的帧与档位重算：现在如实报 `compact 8 / standard 10 / full 57 / skim 3`。
+2. **auto 在"三档都认不出"时选了最贵的那档**：原来按"最小格面积最大"退，
+   等于永远选 full —— full 保留 1 档帧（一帧独占整张画布），格子在数字上最大，一张图却只装得下一帧。
+   改成**按张数退，再比格子**：59 张 → 8 张（省 86%），反正都要糊。
+3. **压张数只会减帧，不会压档位**：161 帧压进 1 张，一路二分减到 **1 帧**，等于什么都没看。
+   新增 `squeezeTiers`：先把全部帧逐档加粗（保留时间覆盖），实在装不下才动帧数。
+   实测同一条素材 `--max-sheets 1`：**1 帧 → 72 帧**（1/7×27 + 1/8×45，fill 97.9%）。
+
+顺带：`maxSheets` 在 auto 路径下被完全忽略（auto 只用 `autoSheetCap`）。现在显式给了就只试那个值、
+不放宽，并标 `forced`。**这里自己绊了一跤**：`capSheets` 在"没给"时兜底是 `Infinity`（不是 0），
+而判据写成了 `capSheets > 0` —— `Infinity > 0` 是 true，于是 `limit = Infinity`、整段压张数被跳过，
+"5 分钟 1 张"从来没生效过（显式传值时才生效）。改成 `Number.isFinite(capSheets)`。
+
+### 压不进预算时，把 skim 的价码摆出来
+
+`relaxed` 时清单多一句：`If you only need the gist, strategy:"skim" is ≤N image(s) (1/8 cells).`
+只报数、不替调用方决定要不要更糊。实测那条 5 分钟窗口：auto 目标 1 张、压到 4 张仍认不出 → 给 8 张，
+**skim 是 3 张**。skim 不进 `AUTO_CANDIDATES`：那个列表按"张数最少优先"排，加进去它会永远胜出。
+
+全片 36.9 分钟实测（844 刀）：`compact 56 / standard 79 / **full 441** / skim 13` 张 ——
+auto 选 compact，874 帧进 53 张、fill 95.1%。**full 是 441 张**，那是旧 fallback 会选中的档。
+
+### 工具 schema 瘦身（它每轮都要重发，不进对话历史也照样收费）
+
+五个工具序列化后 **22,855 字符 ≈ 14.9k token**，其中参数说明 12,647（是顶层描述的 3 倍）。
+这笔钱**跟看不看视频无关**：schema 不在对话历史里，但每次 API 请求都在，20 轮就是 30 万 token。
+
+**做法：把说明书从 schema 搬到干跑结果里。**
+schema 只留"调用前必须知道"的（类型、默认值、枚举），每条参数描述压到 ≤60 字符；
+完整手册（2,553 字符 ≈ 1.7k token）在 `dryRun` **且扫描新鲜时**印一次，之后不再重复。
+
+| | 之前 | 现在 |
+|---|---|---|
+| 五工具合计 | 22,855 字符 ≈ 14.9k token/轮 | **11,777 字符 ≈ 7.7k token/轮** |
+| 参数说明 | 12,647 | **2,961** |
+| 一次性手册 | — | 2,553 字符（只在首次干跑） |
+
+按轮数算净收益：1 轮 -37%、5 轮 -46%、10 轮 -47%、**20 轮 -48%**（旧 297k token → 新 155k）。
+
+历史曲线（供对照，说明"新版本才贵"是错觉）：v0.5.0 就是 9,448/轮；**v0.5.4 的参数重设计
+（need/budget/maxPerSheet/segment）把它抬到 14,216**；0.6.0 只多 4.5%。
+
+两条新测试守着：schema 合计 < 13,500、storyboard < 6,000；说明书必须"首次出现、命中缓存不再印"。
 
 ## [0.6.0] - 2026-11-01
 

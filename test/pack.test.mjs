@@ -9,7 +9,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { UNIT, bounds, bestPlan, rowOptions, solve, toRects } from '../src/storyboard/pack.js';
+import {
+  UNIT, bounds, bestPlan, DEFAULT_GROW, rowOptions, solve, toRects,
+} from '../src/storyboard/pack.js';
 
 const overlaps = (rects) => {
   let n = 0;
@@ -85,6 +87,17 @@ test('toRects: 按 bin 取单张，编号仍然跨张连续', () => {
   assert.deepEqual(seen.sort((a, b) => a - b), all, '两边的编号必须拼成 1..N');
 });
 
+test('toRects: 混合档位同一行不能有 1px 重叠', () => {
+  // [2,0,1,0,0,0] 同一行里 0 档补位格只有 38px 高，旁边的 1 档格是 225px 高。
+  // 旧实现把 h 也放进行分组键，两组分开后水平取整差 1px 修不掉。
+  const p = solve([2, 0, 1, 0, 0, 0]);
+  const rects = toRects(p.cells, { width: 800, height: 450 });
+  assert.equal(overlaps(rects), 0, '混合高度的同一行也不能重叠');
+  for (const r of rects) {
+    assert.ok(r.px >= 0 && r.py >= 0 && r.px + r.pw <= 800 && r.py + r.ph <= 450, `${r.index} 越界`);
+  }
+});
+
 test('rowOptions: 一行填满宽度，行高取最高那格', () => {
   const opts = rowOptions([4, 4, 4]);
   assert.ok(opts.length >= 1);
@@ -113,4 +126,21 @@ test('性能: 96 帧（长片概览规模）求解 < 50ms', () => {
   const ms = performance.now() - t0;
   assert.equal(p.cells.length, 96);
   assert.ok(ms < 50, `求解 ${ms.toFixed(1)}ms 太慢`);
+});
+
+/* ---------------------------------------------------------------- 缓存键（#64） */
+
+test('rowOptions: 不同 stretch 不能共用缓存（flat 行高直接依赖它）', () => {
+  const a = rowOptions([3, 3], DEFAULT_GROW, 0.2, true);
+  const b = rowOptions([3, 3], DEFAULT_GROW, 0.3, true);
+  assert.notDeepEqual(a, b, 'stretch 0.2 和 0.3 必须算出不同的行高');
+  // 再算一次 0.2，必须还是 0.2 的结果（不能被 0.3 覆盖）
+  const again = rowOptions([3, 3], DEFAULT_GROW, 0.2, true);
+  assert.deepEqual(again, a, '回头再算 0.2 仍要拿到 0.2 的结果');
+});
+
+test('rowOptions: grow 参与缓存键（决定能不能升档）', () => {
+  const allow = rowOptions([3, 3], DEFAULT_GROW, 0.2, true);
+  const deny = rowOptions([3, 3], DEFAULT_GROW.map(() => 0), 0.2, true);
+  assert.notDeepEqual(allow, deny, 'grow 不同必须算出不同的候选');
 });

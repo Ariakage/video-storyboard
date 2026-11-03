@@ -34,6 +34,7 @@ node bin/storyboard.mjs <input> [options]
 | `--manifest PATH` | — | write the full machine-readable manifest JSON |
 | `--text` | off | also print the citable text index |
 | `--json` | off | print one JSON object: `{ probe, window, plan, sheets, evidence, manifest, text }` |
+| `--dry-run` | off | scan + plan only; print cut count and image count per strategy, render nothing |
 | `--probe` | — | only probe metadata, even for a URL (never downloads) |
 | `--from N` / `--to N` | whole file | analyse this window only |
 | `--segment N` | 0 | when only `--from` is given, window length; prints the next window |
@@ -42,9 +43,9 @@ node bin/storyboard.mjs <input> [options]
 | `--no-snap` | snap on | with `--batch`, don't align window edges to cuts |
 | `--max-frames N` | 0 (no cap) | cap frames; 0 = one frame per shot |
 | `--max-sheets N` | 0 (no cap) | hard cap on images; re-merges shots when exceeded |
-| `--strategy NAME` | `compact` | `full` / `standard` / `compact` / `skim` / `brief` |
+| `--strategy NAME` | `auto` | `auto` / `full` / `standard` / `compact` / `skim` / `brief` |
 | `--tier-map JSON` | — | exact override, e.g. `'{"5":4,"6":4,"7":4,"8":4}'` |
-| `--budget PIXELS` | 640000 | per-image pixel budget (640k = 800×800 ceiling) |
+| `--budget PIXELS` | 360000 | per-image pixel budget; default 360k = 800×450 (~233 tokens), ceiling 1.69M = 1300×1300 (~994 tokens) |
 | `--pick mid\|sharp\|thumb` | `mid` | frame selection inside a shot |
 | `--burn index\|none` | `index` | stamp the cell number into the cell |
 | `--threshold N\|auto` | `auto` | cut-detection threshold |

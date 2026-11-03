@@ -61,8 +61,8 @@ yt-dlp 合流音视频要调用 ffmpeg。找不到时它**不报错**，直接�
 ## 四、成本与清晰度
 
 **Q14. 怎么算钱？**
-按**图片张数**算，不按分钟。一张约 384 vision token（800×800 上限内，格子数不影响单价）。
-90 秒 PV 默认 `compact` 约 3 张；`skim`/`brief` 1 张。长片张数见
+按**图片张数**算，不按分钟。默认一张 800×450 约 **233** vision token（上限 1300×1300 ≈994）；格子数不影响单价。
+90 秒 PV 默认 `auto` 约 1–3 张；`skim`/`brief` 1 张。长片张数见
 [references/strategy.md](../references/strategy.md)。
 
 **Q15. 清晰度怎么选？**

@@ -41,14 +41,14 @@ node bin/locate.mjs film.mp4 "keyword" --json
 
 | Need | Flag |
 |---|---|
-| everyday reading | default `compact` |
+| everyday reading | default `auto` |
 | read signs / recognize faces | `--strategy full`, or `zoom` the key cells |
 | a PV in one image | `--strategy skim` |
 | a 5-minute clip in one image | `--strategy brief` |
 | hard image cap | `--max-sheets 4` |
 | exact tier override | `--tier-map '{"5":4,"6":4,"7":4,"8":4}'` |
 
-**Image count is the cost** (~384 tokens each). Probe first, then decide granularity.
+**Image count is the cost** (~233 tokens at the default 800×450; up to ~994). Probe first, then decide granularity.
 
 ## Evidence
 

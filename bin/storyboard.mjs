@@ -2,12 +2,14 @@
 /**
  * storyboard — CLI 薄壳，真正的逻辑全在 src/storyboard/pipeline.js（与 DSH 工具同一份实现）。
  *
- *   node bin/storyboard.mjs <video> [--frames N] [--max-sheets N] [--strategy full|standard|compact|skim|brief]
- *                                   [--from 0] [--to 300] [--segment 300] [--budget 640000]
+ *   node bin/storyboard.mjs <video> [--frames N] [--max-sheets N]
+ *                                   [--strategy auto|full|standard|compact|skim|brief]
+ *                                   [--from 0] [--to 300] [--segment 300] [--budget 360000]
  *                                   [--pick sharp|mid|thumb] [--burn index|none]
  *                                   [--threshold auto|15] [--scan-gap 0]
  *                                   [--transcript auto|off] [--detail low|med|high]
  *                                   [--out sheet.png] [--manifest m.json] [--plan 300] [--text]
+ *                                   [--probe] [--dry-run] [--cell-id N] [--json]
  */
 import { writeFile } from 'node:fs/promises';
 
@@ -19,7 +21,7 @@ import { lookupCell } from '../src/storyboard/cells.js';
 import { planWindows } from '../src/storyboard/plan.js';
 import { isHttpUrl } from '../src/storyboard/url.js';
 import {
-  DETAIL_CHARS, formatManifest, formatTimeline, runStoryboard, saveStoryboards,
+  DETAIL_CHARS, formatManifest, formatPlanPreview, formatTimeline, runStoryboard, saveStoryboards,
 } from '../src/storyboard/pipeline.js';
 import { boardGeometry } from '../src/storyboard/board.js';
 import { cliOcr, manifestFromCli, runOptionsFromCli } from '../src/storyboard/cli-options.js';
@@ -29,12 +31,21 @@ const opt = parse(process.argv.slice(2), {
   'scan-gap': 0, integral: null, 'integral-seconds': 0,
   strategy: null, pick: 'mid', burn: 'index', transcript: 'auto',
   out: 'storyboard.png', manifest: null, plan: 0, 'text-only': false, 'cell-range': null,
+  // 只预演：回报切点数与每档要几张图，不出图（与工具的 dryRun 同一条路径）
+  'dry-run': false,
   batch: 0, detail: 'med', 'cell-id': null, probe: false, json: false,
   // scan-height 默认 0 = 按格子最大尺寸推（1 档整幅 800×450，720p 已是 2.5 倍超采样）
   cookies: null, 'allow-anonymous': false, 'scan-height': 0, 'zoom-height': 1080,
   'transcript-file': null, 'source-hash': false, quality: 'medium',
 });
 const input = opt._[0];
+// 不认识的开关要喊一声：0.6 删了 --cells / --sheets / --need，而外面的教程、脚本还是老写法，
+// 静默忽略会让人以为参数生效了（"我明明写了 --cells 9，怎么格子数还是 auto 挑的"）。
+if (opt.$unknown?.length) {
+  console.error(`[warn] 未识别的参数：${opt.$unknown.map((k) => `--${k}`).join(' ')}（已忽略）。`
+    + ' 0.6 起没有 --cells/--sheets/--need，改用 --frames N / --strategy auto|compact|standard|skim|full，'
+    + '先加 --dry-run 可以只报代价不出图。');
+}
 if (!input) {
   console.error('usage: node bin/storyboard.mjs <video-or-url> [--frames N] [--max-sheets N] [--from 0] [--to 300] ...');
   process.exit(2);
@@ -199,6 +210,19 @@ if (r.transcript) {
   log(`[transcript] ${r.transcript.source}${r.transcript.model ? ` (${r.transcript.model})` : ''}` +
     `${r.transcript.segments ? `，${r.transcript.segments} 段` : ''}` +
     `${r.transcript.error ? `  ⚠️ ${r.transcript.error}` : ''}`);
+}
+
+// 预演：一张图都没有，直接打文本走人（--out 不写文件，避免留下半个结果）
+if (r.planOnly) {
+  const preview = formatPlanPreview(r);
+  if (opt.json) {
+    console.log(JSON.stringify({
+      input, probe: info, planOnly: true, plan: r.plan, variants: r.variants ?? [], text: preview,
+    }, null, 2));
+  } else {
+    console.log(`\n${preview}`);
+  }
+  process.exit(0);
 }
 
 const paths = await saveStoryboards(r, opt.out, { quality: 4 });

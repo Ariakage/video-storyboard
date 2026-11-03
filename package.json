@@ -1,6 +1,6 @@
 {
   "name": "video-storyboard-skill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Agent Skill: turn a video into storyboard images you can cite — one frame per shot, cell size follows cut density (1/1 … 1/8), row-packed into as few images as possible, with a timestamped index and a text locator.",
   "keywords": [
     "agent-skill",
@@ -84,6 +84,7 @@
     "doctor": "node bin/doctor.mjs",
     "asrcheck": "node bin/asr-check.mjs",
     "guard": "node scripts/guard-publish.mjs",
-    "install-skill": "node scripts/install-skill.mjs"
+    "install-skill": "node scripts/install-skill.mjs",
+    "verify-tokens": "node scripts/verify-image-tokens.mjs"
   }
 }

@@ -17,6 +17,7 @@ Config file: `~/.video-storyboard/asr.json` (or `$VIDEO_STORYBOARD_HOME/asr.json
 
 ```json
 {
+  "enabled": true,
   "baseUrl": "http://127.0.0.1:8000/v1",
   "model": "paraformer-zh-2024-03-09",
   "language": "zh",
@@ -30,6 +31,7 @@ Config file: `~/.video-storyboard/asr.json` (or `$VIDEO_STORYBOARD_HOME/asr.json
 }
 ```
 
+- `"enabled": false` (or `VIDEO_STORYBOARD_ASR_ENABLED=0`) turns the whole speech layer off.
 - Loopback `baseUrl` (`127.0.0.1`, `localhost`, `[::1]`, `0.0.0.0`) **requires no key**.
 - A remote endpoint needs a key: `"key": "sk-..."` in the file, or `VIDEO_STORYBOARD_ASR_KEY`
   (legacy `DSH_ASR_KEY`).
@@ -49,6 +51,7 @@ VIDEO_STORYBOARD_ASR_MODEL      (DSH_ASR_MODEL)
 VIDEO_STORYBOARD_ASR_LANG       (DSH_ASR_LANG)
 VIDEO_STORYBOARD_ASR_TERMS      (DSH_ASR_TERMS)
 VIDEO_STORYBOARD_ASR_DEBUG      (DSH_ASR_DEBUG)
+VIDEO_STORYBOARD_ASR_ENABLED    (DSH_ASR_ENABLED)
 ```
 
 ## Verify cheaply

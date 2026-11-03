@@ -99,6 +99,7 @@ export function effectiveAsrKey(cfg = ASR_DEFAULTS, apiKey) {
  * `transcribe()` 的门用同一句话，否则清单与实际行为会朝反方向偏差。
  */
 export function canTranscribe(cfg = ASR_DEFAULTS, apiKey) {
+  if (cfg.enabled === false) return false;
   return !needsCloudKey(cfg.baseUrl, effectiveAsrKey(cfg, apiKey));
 }
 
@@ -116,7 +117,9 @@ export function resolveAsrConfig(env = process.env) {
   const keyEnv = cleanEnvValue(envValue(env, 'VIDEO_STORYBOARD_ASR_KEY_ENV', 'DSH_ASR_KEY_ENV'))
     || ENV.asrKey[0];
   const fromEnv = Boolean(envBaseUrl || envValue(env, keyEnv, ...ENV.asrKey));
+  const enabled = envValue(env, ...ENV.asrEnabled) === '0' ? false : (file.enabled !== false);
   const resolved = {
+    enabled,
     baseUrl: envBaseUrl || file.baseUrl || 'https://api.siliconflow.cn/v1',
     model: envModel || file.model || 'FunAudioLLM/SenseVoiceSmall',
     keyEnv,
@@ -149,7 +152,7 @@ function asrConfigStamp(env) {
   } catch { /* 文件不存在 */ }
   const keys = [
     ...ENV.asrBaseUrl, ...ENV.asrModel, ...ENV.asrLang,
-    'VIDEO_STORYBOARD_ASR_KEY_ENV', 'DSH_ASR_KEY_ENV', ...ENV.asrKey,
+    'VIDEO_STORYBOARD_ASR_KEY_ENV', 'DSH_ASR_KEY_ENV', ...ENV.asrKey, ...ENV.asrEnabled,
   ];
   const envBits = keys.map((k) => `${k}=${env[k] ?? ''}`);
   return [file, ...envBits].join('|');

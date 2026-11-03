@@ -19,11 +19,15 @@ Cell size is therefore information, not decoration.
 
 | `strategy` | Effect | Typical use |
 |---|---|---|
+| **`auto` (default)** | image count from duration (~4 min/image), then the cheapest tier whose smallest cell stays readable | when you don't pick |
 | `full` | one tier bigger per frame (tier 1 stays 1) | read signs/faces in the overview |
 | `standard` | tier 1 becomes 1/2; others unchanged | every shot legible |
-| **`compact`** | one tier smaller per frame | default: clear and cheap |
+| `compact` | one tier smaller per frame | clear and cheap |
 | `skim` | all 1/8, integral sampling off, cuts merged at 0.35 s | one PV → one image |
 | `brief` | all 1/8, cut spacing widened until the whole clip fits one image | 5-minute clip in one look |
+
+`auto` can be disabled with `VIDEO_STORYBOARD_AUTO=0` (or `{"storyboard":{"auto":false}}` in
+`video.json`), which falls back to `compact`.
 
 Old names map automatically: `quality→full`, `balanced→standard`, `saver/frugal→compact`,
 `thrifty→skim`, `ultra→brief`.
@@ -44,27 +48,28 @@ perfect square of cells, which packs fuller without adding an image.
 
 | strategy | frames | images | vision tokens | smallest cell |
 |---|---|---|---|---|
-| `full` | 73 | 18 | 6912 | — |
-| `standard` | 73 | 5 | 1920 | 95×62 |
-| **`compact`** | 74 | **3** | **1152** | 114×54 |
-| `skim` | 53 | 1 | **384** | 114×54 |
-| `brief` | 56 | 1 | **384** | 100×56 |
+| `full` | 73 | 18 | ~4.2k | — |
+| `standard` | 73 | 5 | ~1.2k | 95×62 |
+| `compact` | 74 | 3 | ~700 | 114×54 |
+| `skim` | 53 | 1 | ~233 | 114×54 |
+| `brief` | 56 | 1 | ~233 | 100×56 |
 
 5-minute clip (299 s, 150 cuts):
 
 | strategy | frames | images | tokens |
 |---|---|---|---|
-| `standard` | 195 | 19 | 7296 |
-| **`compact`** | 201 | **10** | **3840** |
-| `skim` | 149 | 3 | 1152 |
-| `brief` | 51 | 1 | **384** |
+| `standard` | 195 | 19 | ~4.4k |
+| `compact` | 201 | 10 | ~2.3k |
+| `skim` | 149 | 3 | ~700 |
+| `brief` | 51 | 1 | ~233 |
 
-One image is ~384 vision tokens up to an 800×800 canvas; the number of cells does not change
-that. **Image count is the cost**, which is why `max-sheets` exists.
+One 800×450 image is ~233 vision tokens (42px token grid, floor 544², cap 994 at 1300×1300);
+the number of cells does not change that. **Image count is the cost**, which is why
+`max-sheets` and `--dry-run` exist.
 
 ## Reading guidance
 
-- `compact` is the right default for “what happened”. Use `full` only for specific cells where
+- `auto` is the right default for “what happened”. Use `full` only for specific cells where
   text/faces matter — or better, `zoom` those cells.
 - For a film, read sequentially (`--segment`) instead of one wide pass: one overview of a
   2-hour film makes every cell unreadable and spoils the ending.

@@ -37,7 +37,7 @@ cell 2 = 00:33.10-00:36.42  k=2 (1/2)  cuts 3
 ## What it solves
 
 Frame-per-second extraction explodes token cost; subtitles alone throw away the picture. This
-skill takes the third path: **compress the picture into a grid** (≤384 vision tokens per image)
+skill takes the third path: **compress the picture into a grid** (~233 vision tokens per image at the default 800×450, up to ~994)
 and pair it with a **time-aligned text index** (start/end per cell, dialogue inside it, cut count).
 Need detail? `zoom` one window.
 
@@ -51,7 +51,7 @@ The 30-second start above already installs a copy. Other options:
 
 ```bash
 node scripts/install-skill.mjs --link          # symlink; edits apply immediately
-node scripts/install-skill.mjs --dest DIR      # another skills root
+node scripts/install-skill.mjs --dest DIR      # another skills root (e.g. ~/.agents/skills)
 node scripts/install-skill.mjs --check         # where is it installed?
 node scripts/install-skill.mjs --remove        # uninstall
 ```
@@ -97,14 +97,23 @@ Auxiliary: `bin/doctor.mjs`, `bin/scan-video.mjs`, `bin/scan-stats.mjs`, `bin/as
 
 | `strategy` | Per-frame size | 90 s PV measured | Use |
 |---|---|---|---|
-| `full` | one tier bigger | 18 images / 6912 tok | read signs, recognize faces |
-| `standard` | tier 1 → 1/2 | 5 / 1920 | every shot legible |
-| **`compact` (default)** | one tier smaller | **3 / 1152** | everyday |
-| `skim` | all 1/8, no integral frames | 1 / 384 | one PV, one image |
-| `brief` | all 1/8, gaps widen to one image | 1 / 384 | a 5-minute clip in one look |
+| **`auto` (default)** | image count from duration (~4 min/image), then the cheapest tier whose smallest cell stays readable | 1–3 / ~233–700 tok | when you don't pick |
+| `full` | one tier bigger | 18 / ~4.2k tok | read signs, recognize faces |
+| `standard` | tier 1 → 1/2 | 5 / ~1.2k tok | every shot legible |
+| `compact` | one tier smaller | 3 / ~700 tok | everyday |
+| `skim` | all 1/8, no integral frames | 1 / ~233 tok | one PV, one image |
+| `brief` | all 1/8, gaps widen to one image | 1 / ~233 tok | a 5-minute clip in one look |
 
+Tokens are estimated at ~233 per 800×450 image; the canvas can go to 1300×1300 (~994/image), and the
+manifest reports the real number. Disable `auto` with `VIDEO_STORYBOARD_AUTO=0` to go back to `compact`.
 Old names (`quality/balanced/saver/frugal/thrifty/ultra`) still map. `--tier-map '{"5":4}'`
 overrides exact tiers. Details: [references/strategy.md](references/strategy.md).
+
+Preview the cost without rendering:
+
+```bash
+node bin/storyboard.mjs video.mp4 --dry-run
+```
 
 ## Long videos
 

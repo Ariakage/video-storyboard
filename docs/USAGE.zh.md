@@ -81,14 +81,14 @@ node bin/locate.mjs film.mp4 "关键词" --from 0 --to 600 --json
 
 | 需求 | 参数 |
 |---|---|
-| 日常看剧情 | 默认（`compact`） |
+| 日常看剧情 | 默认（`auto`，可被 `VIDEO_STORYBOARD_AUTO=0` 关掉） |
 | 要读画面里的字/认脸 | `--strategy full`，或只对关键格 `zoom` |
 | 一条 PV 一张图 | `--strategy skim` |
 | 5 分钟片子一张图 | `--strategy brief` |
 | 限制总张数 | `--max-sheets 4` |
 | 精确覆盖某几档 | `--tier-map '{"5":4,"6":4,"7":4,"8":4}'` |
 
-**图片张数才是成本**：一张约 384 token，格子数不影响单图价格。先 `probe`，再决定读到什么粒度。
+**图片张数才是成本**：默认 800×450 一张约 233 token（上限 ≈994），格子数不影响单图价格。先 `probe`，再决定读到什么粒度。
 
 ## 台账与证据
 
