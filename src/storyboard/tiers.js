@@ -20,18 +20,83 @@
  *
  * 两者差一个 fps 常数，而 docs 里的数值是按帧给的。换 60fps 素材时用"刀/秒"会把
  * 判据整体平移一倍，所以这里严格按帧算，只在注释里换算成人话。
+ *
+ * ⚠️ **但"严格按帧算"的代价是：表只在 30fps 素材上是对的。**
+ *
+ * 窗宽是 `INTEGRAL_FRAMES = 100`（帧），切点时刻是秒 —— 于是：
+ *
+ * | 素材帧率 | 窗覆盖的秒数 | 每秒一刀时算出的概率 | 判成几档 |
+ * |---|---|---|---|
+ * | 24fps | 4.17 秒 | 高 | 5 档 |
+ * | 30fps | 3.33 秒 | 中（标定基准） | 4 档 |
+ * | 60fps | **1.67 秒** | **只有一半** | **2 档** |
+ * | 120fps | 0.83 秒 | 四分之一 | 2 档 |
+ *
+ * 也就是**同样一段画面，60fps 素材会被判成两档（格子面积是 30fps 的 4 倍）**，
+ * 一页只放得下 4 帧，"镜头越密格子越小"这件事在高帧率素材上直接失效。
+ * 60fps 在游戏录屏、运动视频、手机高帧率拍摄里很常见。
+ *
+ * 所以加了 `timeNormalize`（默认开）：把窗宽、平滑窗、阈值三样一起按
+ * `fps / 30` 折算，**30fps 时三个系数都是 1，行为逐位不变**；非 30fps 素材
+ * 会被拉回"30fps 标定"的含义上。实测 24 / 60 / 120fps 归一化后与 30fps 完全一致。
+ *
+ * 想回到老口径（不同帧率判不同档）就传 `timeNormalize: false`。
  */
 
 import { readEnv } from './config.js';
 
 /** 7 道阈值 → 8 个档位（每帧的切点概率，照抄 docx）。 */
 export const LEVEL_THRESHOLDS = Object.freeze([0.0085, 0.02, 0.03, 0.04, 0.06, 0.08, 0.1]);
+
+/**
+ * 第二套阈值：**按人眼瞬时记忆定标**（see-now 0.2.0 里先做的，这里同步过来）。
+ *
+ * 端点不是拍脑袋的：一格代表的时间**最多 3 秒**（Pöppel 的"主观现在" 2~3 秒，
+ * 电影镜头时长本身就有 ~3 秒的偏好）、**最少 0.3 秒**（注意眨眼 200~500 ms、图标记忆的
+ * 部分报告优势在 250~500 ms 内消失 —— 比这更近的两次变化人眼当成一次），中间六道按等比
+ * （公比 1.4678，时长辨别服从 Weber 律）。
+ *
+ * **单位换算是关键**：see-now 那边用「刀/秒」，这边用「每帧概率」，两者差一个 fps。
+ * 这里是把 see-now 的表除以 30 得到的 —— 和 docx 那套的换算关系完全一致
+ * （0.26/30 = 0.00867 ≈ 0.0085、3.0/30 = 0.1），所以形状没被改，只是端点内收。
+ *
+ * 实测（see-now 60 秒素材、同样留帧数）：**张数 -14%~-18%，平均档位 +0.5**（格子小一档）。
+ * 无切点的素材两套完全一致。默认仍是 docx —— 想压 token 再切过去。
+ */
+export const PERCEPTUAL_THRESHOLDS = Object.freeze([
+  0.0111, 0.0163, 0.0239, 0.0351, 0.0516, 0.0757, 0.1111,
+]);
+
+/** 可选的阈值表。加新表在这里登记，`thresholdsFor()` 是唯一入口。 */
+export const TIER_CURVES = Object.freeze({
+  docx: LEVEL_THRESHOLDS,
+  perceptual: PERCEPTUAL_THRESHOLDS,
+});
+
+/** `video.json` 里 `storyboard.tierCurve` 认的值。 */
+export const TIER_CURVE_KEYS = Object.freeze(['docx', 'perceptual']);
+
+/**
+ * 名字 → 阈值表。**认不出来的名字一律退回 docx**，不抛 ——
+ * 配置写错不该让整个分镜失败，宁可跑默认那套。
+ */
+export function thresholdsFor(curve) {
+  return TIER_CURVES[String(curve ?? '').trim()] ?? LEVEL_THRESHOLDS;
+}
 /** 滞回：升档要越过 +(1+h)，降档要跌穿 −(1−h)，免得在阈值附近反复横跳。 */
 export const HYSTERESIS = 0.05;
 /** 切点密度的积分窗（帧）。docx 的 dt = 100。 */
 export const INTEGRAL_FRAMES = 100;
 /** 密度曲线的平滑窗（帧）。docx 的 movmean 窗口 50。 */
 export const SMOOTH_FRAMES = 50;
+
+/**
+ * 阈值表是按**这个帧率**标定的（docx 那句"0.0085 ≈ 3.3 秒一刀"就是 30fps 下算的）。
+ * `timeNormalize` 用它当基准做折算 —— 换基准等于换掉整套标定，别动。
+ *
+ * 积分阈值标定在同一条基准上，`INTEGRAL_BASE_FPS` 直接引用这个值（#90 nit）。
+ */
+export const BASE_FPS = 30;
 
 export const TIER_MIN = 1;
 export const TIER_MAX = 8;
@@ -142,24 +207,88 @@ export function imageTokens(w, h) {
 }
 
 /**
- * 画布尺寸：面积 <= budget，且**任一边不超过 800**（DS 的视觉上限）。
+ * 顶部时间抬头的高度（像素）。**只跟图宽有关** —— 字号是 5×7 点阵的整数倍，
+ * 宽了就该更高一点。
+ *
+ * 定义在 tiers 而不是 sheet，是因为 `fitCanvas` 要按它算**总高**（见下面的高度卡线）：
+ * 出图尺寸 = 格子区 + 这条抬头，只对格子区做对齐会把它漏掉。
+ */
+export function headerHeight(width) {
+  return Math.max(18, Math.round((Number(width) || 0) * 0.024));
+}
+
+/**
+ * 把格子区高度压回"格子区 + 页眉 = 42 的整数倍"，**只在溢出量 <= 高度 1.8% 时生效**。
+ *
+ * 出图时顶上会叠一条 `headerHeight` 的抬头，真正的 PNG 高度是两者之和。
+ * 不把抬头算进来就会卡在行边界上多收一整行 token：
+ *
+ *   449 + 19 = 468 → 12 行 → 242 token
+ *   443 + 19 = 462 → 11 行 → 222 token   ← 格子区只矮 1.3%
+ *
+ * 压太多（差 30px 也去压）是拿面积换 token —— 两者近似线性，不划算。所以设一道闸。
+ *
+ * ## 闸门是**相对**的，不是写死的 8px（#91）
+ *
+ * 8px 这个数是在 443px 高的横屏画布上标出来的（1.8%）。写死成绝对值就对竖屏失效：
+ * 9:16 的画布高 747，含页眉 765，溢出 9px > 8 → 不压，于是白付一整行：
+ *
+ *   420×747 + 18 = 765 → 19 行 → 211 token
+ *   420×738 + 18 = 756 → 18 行 → 200 token   ← 格子区只矮 1.2%，便宜 5.2%
+ *
+ * 横屏是**宽**在长边上（宽已对齐 42），竖屏是**高**在长边上，所以这条闸门只影响竖屏 ——
+ * 也就是说以前这套画布尺寸只对横屏调过。改成按高度取 1.8%：443px 上仍是 8px（不变），
+ * 747px 上给到 13px，竖屏才不会白付一行。
+ */
+function snapHeightToHeader(height, width) {
+  const hh = headerHeight(width);
+  const over = (height + hh) % IMAGE_CELL;
+  const gate = Math.max(8, Math.round((Number(height) || 0) * 0.018));
+  if (over <= 0 || over > gate) return height;
+  const next = height - over;
+  if (next < 36) return height;
+  // **只在真降价时才压**：地板区（<544²）压多少都是同一个价，白掉像素反而是亏。
+  return imageTokens(width, next + hh) < imageTokens(width, height + hh) ? next : height;
+}
+
+/**
+ * 画布尺寸：面积 <= budget，且**任一边不超过 maxSide**。
  *
  * 16:9 + 640k 算出来是 1066×600，会被 800 卡成 800×450 —— 这正是用户实测的
  * "再大就没意义"：超过 800 的部分宿主会缩回去，而清单里的格子尺寸就成了假数。
+ *
+ * ## 为什么宽度要向下对齐到 42px
+ *
+ * 计费网格是 `ceil(ceil(px/14)/3)` 个 token 格，一格 42px，而每行还要多收 1 个
+ * 分隔 token。所以 **W 落在 42 的整数倍上时，一行才不多收那个 token**。
+ *
+ *   800×450 → 812 对齐 → 20 列 → 11×(20+1)+2 = 233
+ *   798×450 → 19 列       → 11×(19+1)+2 = 222   ← 面积只少 0.25%，便宜 4.7%
+ *
+ * 只对"对齐真能降价"的情况生效（下面那个 if）：地板区（<544²）本来就按 544² 收费，
+ * 对齐只会白掉像素，所以原样返回。
+ *
+ * 高度则**按含页眉的总高**卡线（`snapHeightToHeader`），不是简单地对齐 450 这个数。
  */
 export function fitCanvas(aspect, { maxSide = MAX_CANVAS_SIDE, budget = DEFAULT_BUDGET } = {}) {
   const a = Math.max(0.2, Math.min(5, Number(aspect) || 16 / 9));
   // **地板**：计费时小于 544² 的图一律按 544² 收，所以画得比它小一分钱不省、只是更糊。
   // 这里直接把面积抬到地板（清单会说明"已抬升"），别让调用方以为自己省了钱。
   const area = Math.min(MAX_IMAGE_AREA, Math.max(IMAGE_UPSCALE_AREA, Number(budget) || DEFAULT_BUDGET));
-  let w = Math.sqrt(area * a);
-  let h = w / a;
+  const w = Math.sqrt(area * a);
+  const h = w / a;
   const shrink = Math.min(1, maxSide / w, maxSide / h);
-  return {
-    width: Math.max(64, Math.round(w * shrink)),
-    height: Math.max(36, Math.round(h * shrink)),
-    aspect: a,
-  };
+  const width = Math.max(64, Math.round(w * shrink));
+  const height = snapHeightToHeader(Math.max(36, Math.round(h * shrink)), width);
+
+  const snapped = Math.floor(width / IMAGE_CELL) * IMAGE_CELL;
+  if (snapped >= 64) {
+    const snapH = snapHeightToHeader(Math.max(36, Math.round(snapped / a)), snapped);
+    if (imageTokens(snapped, snapH) < imageTokens(width, height)) {
+      return { width: snapped, height: snapH, aspect: a };
+    }
+  }
+  return { width, height, aspect: a };
 }
 
 /**
@@ -195,6 +324,7 @@ export function levelCurve({
   hysteresis = HYSTERESIS,
   integralFrames = INTEGRAL_FRAMES,
   smoothFrames = SMOOTH_FRAMES,
+  timeNormalize = true,
 } = {}) {
   if (!(duration > 0)) throw new RangeError(`duration must be > 0, got ${duration}`);
   const rate = Number(fps) > 0 ? Number(fps) : 30;
@@ -209,8 +339,20 @@ export function levelCurve({
   const cum = new Float64Array(n + 1);
   for (let i = 0; i < n; i += 1) cum[i + 1] = cum[i] + bin[i];
 
+  /**
+   * 帧率归一化：窗宽和阈值一起按 `rate / BASE_FPS` 折算。
+   *
+   * - 窗**帧数** × K（帧多了，但覆盖的秒数不变）
+   * - 阈值 ÷ K（同样的"刀/秒"，在更宽的窗里就是更小的概率）
+   *
+   * 30fps 时 K = 1，两个式子都是恒等 —— 现有行为逐位不变。
+   */
+  const K = timeNormalize ? rate / BASE_FPS : 1;
+  const th = timeNormalize ? thresholds.map((v) => v / K) : thresholds;
+  const framesK = (v) => Math.max(1, Math.round(v * K));
+
   // 2) 卷积 = 窗内切点数 / 窗宽（帧）→ "每帧切点概率"
-  const W = Math.max(1, Math.min(n, Math.round(integralFrames)));
+  const W = Math.max(1, Math.min(n, framesK(integralFrames)));
   const density = new Float64Array(n);
   for (let i = 0; i < n; i += 1) {
     const hi = Math.min(n, i + Math.ceil(W / 2));
@@ -219,7 +361,7 @@ export function levelCurve({
   }
 
   // 3) movmean 平滑
-  const S = Math.max(1, Math.min(n, Math.round(smoothFrames)));
+  const S = Math.max(1, Math.min(n, framesK(smoothFrames)));
   const pre = new Float64Array(n + 1);
   for (let i = 0; i < n; i += 1) pre[i + 1] = pre[i] + density[i];
   const smoothed = new Float64Array(n);
@@ -230,8 +372,8 @@ export function levelCurve({
   }
 
   // 4) 带滞回的状态机（照抄 docx 的 calc_levels_and_jumps）
-  const up = thresholds.map((v) => v * (1 + hysteresis));
-  const down = thresholds.map((v) => v * (1 - hysteresis));
+  const up = th.map((v) => v * (1 + hysteresis));
+  const down = th.map((v) => v * (1 - hysteresis));
   const countAtLeast = (val, arr) => {
     let k = 0;
     for (const v of arr) if (val >= v) k += 1;
@@ -249,7 +391,7 @@ export function levelCurve({
     }
     levels[i] = Math.max(TIER_MIN, Math.min(TIER_MAX, cur));
   }
-  return { fps: rate, frames: n, density, smoothed, levels, thresholds };
+  return { fps: rate, frames: n, density, smoothed, levels, thresholds: th, timeNormalize };
 }
 
 /** 某一时刻的档位（就近取帧）。 */
@@ -273,6 +415,14 @@ export const STRATEGIES = Object.freeze({
   full: { bump: -1, floor: 1, label: '全尺寸', note: '每帧尺寸升一档（1 档不再升）' },
   standard: { bump: 0, floor: 2, label: '标准', note: '1 档压成 1/2 尺寸' },
   compact: { bump: 1, label: '紧凑', note: '每帧尺寸降一档' },
+  /**
+   * 原生：**什么都不挪**，按密度算出来几档就是几档。
+   *
+   * 它和 `standard` 的区别只在 floor —— standard 把 1 档压成 1/2（`floor: 2`），
+   * native 保留 1 档满格。存在的理由是**给"逐档自定义"当底座**：自定义映射表
+   * 接在策略之后，底座必须是"原样"，否则用户设的 `1→3` 是在一个已经被挪过的档位上再挪。
+   */
+  native: { bump: 0, label: '原生', note: '按密度算出来的档位原样使用' },
   // 速览：**全部 1/8 档 + 不要假切点 + 扫描期按最小间隔合并切点**。
   // 目标不是"看清"，是"用最少的 token 知道这 90 秒大概发生了什么"。
   skim: {
@@ -322,6 +472,12 @@ export const BIN_COST = Object.freeze({
   full: 0.55,       // 宁可多开一张，也要保住格子尺寸
   standard: 1.02,
   compact: 1.5,
+  /**
+   * `native` 不给 auto 用（`AUTO_CANDIDATES` 里没有它），但用户显式传的时候要走这个数。
+   * 它和 `standard` 的保真度一样（都不改档位），只是不压 1 档。
+   * 不写的话会落到 `BIN_COST[name] ?? 1.02` 的兜底 —— 值一样，但那是巧合，不是设计。
+   */
+  native: 1.02,
   skim: 2.5,        // 把"多一张"算贵，尽量一张装完
   brief: 2.5,
 });
@@ -372,6 +528,22 @@ export function autoSheetCap(duration, { secondsPerImage = AUTO_SECONDS_PER_IMAG
   const d = Number(duration);
   if (!(d > 0)) return 1;
   return Math.max(1, Math.min(max, Math.round(d / per)));
+}
+
+/**
+ * 不封顶的张数是不是已经**失控**了（该强行兑现预算，哪怕格子变小）。
+ *
+ * 正常逻辑是"可读性优先"：压不进预算就退回不封顶。但有些片子（BBC《Mountains》：
+ * 49 分钟、316 刀、其中 305 帧是 1 档大格）不封顶要 **344 张图 ≈ 8 万 token** ——
+ * 那不是"多花一张"，是失控。超过 `max(64, 8×预算)` 就认定为失控。
+ *
+ * 64 是绝对下限：5 分钟的 PV 就算要 60 张也不算失控（那是它真实的镜头数）。
+ */
+export function shouldForceSheetCap(naturalBins, targetCap) {
+  const n = Number(naturalBins);
+  const l = Number(targetCap);
+  if (!(n > 0) || !(l > 0)) return false;
+  return n > Math.max(64, l * 8);
 }
 
 /**
@@ -437,13 +609,28 @@ export function applyStrategy(tiers, strategy = DEFAULT_STRATEGY) {
 export const INTEGRAL_REF_SCORE = 4;
 
 /**
+ * 积分阈值是按**这个帧率**标的（`T = 4 × 30 × 6` 正好落在设计的"6 秒一个采样点"上）。
+ *
+ * 之前这里写的是"实际 fps"，于是 T 随帧率线性涨，而 `acc` 累的逐帧分本来就与
+ * 帧率成反比（帧间隔越短差越小）—— **Σscore 与 fps 无关**。两者相乘的结果是
+ * 高帧率永远攒不够（实测同一段 60 秒素材、每秒累计 120 分：12fps 出 24 个采样点、
+ * 30fps 出 10 个、60fps 只剩 5 个）。
+ *
+ * **和 `BASE_FPS` 是同一个数**（#90 nit）：阈值表和积分阈值都标在 30fps 上，
+ * 换基准等于换掉整套标定，只改一个就会让两套判定错位。所以这里直接引用，不另写字面量。
+ */
+export const INTEGRAL_BASE_FPS = BASE_FPS;
+
+/**
  * **积分采样点（假切点）**：沿时间累加画面变化率，累够阈值就记一个点、然后清零。
  *
  * 这是用户要的"积分取帧"，顺序上**排在真切点之后**：
  *   - 真切点先定边界（它们是硬切，不能动）；
  *   - 假切点只在真切点之间补，并且离真切点太近就不补（真切点自己已经是边界）。
  *
- * **阈值必须是绝对值**：`T = INTEGRAL_REF_SCORE × fps × equivSeconds`。
+ * **阈值必须是绝对值**：`T = INTEGRAL_REF_SCORE × INTEGRAL_BASE_FPS × equivSeconds`。
+ * 注意乘的是**基准帧率（30）而不是实际 fps** —— 逐帧分与 fps 成反比，Σscore 与 fps 无关，
+ * 乘实际 fps 会让高帧率素材的采样点直接消失（见 `INTEGRAL_BASE_FPS` 的注释）。
  *
  * 曾经写成 `T = 全片平均每秒变化量 × equivSeconds` —— 那是错的：画面动得越厉害，
  * 平均分越高，阈值也跟着涨，两者抵消，于是不管素材多快多慢，都是固定
@@ -461,7 +648,7 @@ export const INTEGRAL_REF_SCORE = 4;
  */
 export function integralMarks({
   duration, series = [], cuts = [], start = 0,
-  equivSeconds = 6, minGap = 0.8, skipNearCut = 0.35, fps,
+  equivSeconds = 6, minGap = 0.8, skipNearCut = 0.35, fps, timeNormalize = true,
 } = {}) {
   if (!(duration > 0)) throw new RangeError(`duration must be > 0, got ${duration}`);
   const pts = (Array.isArray(series) ? series : [])
@@ -478,7 +665,8 @@ export function integralMarks({
     : (pts.length > 1 && pts[pts.length - 1].t > pts[0].t
       ? (pts.length - 1) / (pts[pts.length - 1].t - pts[0].t)
       : 12);
-  const T = INTEGRAL_REF_SCORE * rate * equivSeconds;
+  // 折算：用基准帧率，不用实际 fps（关掉 timeNormalize 就退回旧口径）
+  const T = INTEGRAL_REF_SCORE * (timeNormalize ? INTEGRAL_BASE_FPS : rate) * equivSeconds;
   if (!(T > 0)) return [];
 
   const out = [];
@@ -575,13 +763,105 @@ export function framesFromBounds({
 }
 
 /**
- * **积分假切点切出来的帧，档位提两档。**
+ * **静态长镜头的密度兜底**（issue #87）。
+ *
+ * 病：密度只由切点推。一段 PPT / 课件 / 单机位讲座，全片可能只有 1 个切点，
+ * 于是整段被当成"一个镜头"，钉死 1 帧/格、一格 40 秒 —— 中间翻过去的十几页全看不见，
+ * 而且清单里没有任何提示，调用方以为"成功了"。
+ *
+ * 这不是"切点检测不够灵"：幻灯片翻页是**内容替换**，不是镜头变化；扫描器的面积门槛
+ * （`cutAbs` / mc 80）本来就是给影视素材定的。所以这里做的是**按时间兜底**，不是调阈值：
+ * 切点撑不起密度时，至少每 `STATIC_SHOT_MAX_SEC` 秒留一帧。
+ *
+ * 只在"整个窗口 ≤1 个真切点"时生效，且帧数封顶 `STATIC_SHOT_MAX_FRAMES` ——
+ * 一段 40 分钟的单机位讲座不该按时间切出 80 帧。
+ */
+export const STATIC_SHOT_MAX_SEC = 30;
+export const STATIC_SHOT_MAX_FRAMES = 8;
+/** 短于这个长度的窗口不兜底：十几秒的单镜头本来就该一帧 */
+export const STATIC_SHOT_MIN_SEC = 60;
+
+/**
+ * 这个窗口要不要走时间兜底（纯函数，好测）。
+ *
+ * @param {{segs?:Array<{from:number,to:number,cut?:boolean}>, duration?:number,
+ *          minSec?:number, maxSec?:number}} o
+ * @returns {boolean}
+ */
+export function needsTimeFloor({ segs = [], duration = 0, minSec = STATIC_SHOT_MIN_SEC,
+  maxSec = STATIC_SHOT_MAX_SEC } = {}) {
+  if (!(duration >= minSec)) return false;
+  const realCuts = segs.filter((s) => s?.cut === true).length;
+  if (realCuts > 1) return false;                       // 密度能算出来，不插手
+  return segs.some((s) => (Number(s.to) - Number(s.from)) > maxSec);
+}
+
+/**
+ * 把过长的段按时间切开（纯函数，不改入参）。
+ *
+ * 每次都挑**当前最长**的那一段，一次切成"够用的等分"，直到都 ≤ `maxSec` 或总帧数到 `cap`。
+ * 切出来的新段 `via: 'time'`（清单靠它说"这段是按时间兜底的"），
+ * 只有第一段继承原来的 `cut` 标记。
+ *
+ * **为什么不是"每次切两半"**（issue #89）：二分是"切到 ≤maxSec **或** 撞 cap 就停"，
+ * 撞 cap 时会留下超标的格子 —— 而清单一直写着 `≤maxSec each`，实测有 39.6 秒的格子，
+ * 下游模型照着这句话算就会对不上账。改成按需等分：一段 90 秒要 ≤30 秒就是切 3 刀，
+ * 不是先切 45+45 再各来一刀（4 段），同样满足上限但少吃一个额度，cap 就不容易撞。
+ * 真撞上了也没关系：`splitStaticShots` 只负责尽力，清单会报**实际最长那一格**。
+ *
+ * @param {Array<{from:number,to:number,cut?:boolean,via?:string}>} segs
+ * @param {{maxSec?:number, cap?:number}} [o]
+ */
+export function splitStaticShots(segs, { maxSec = STATIC_SHOT_MAX_SEC,
+  cap = STATIC_SHOT_MAX_FRAMES } = {}) {
+  if (!Array.isArray(segs) || segs.length === 0) return segs;
+  const limit = Math.max(1, Math.min(Number(cap) || segs.length, 64));
+  if (segs.length >= limit) return segs;
+  const out = segs.map((s) => ({ ...s }));
+  let guard = 0;
+  while (out.length < limit && guard < 64) {
+    guard += 1;
+    let k = -1;
+    for (let i = 0; i < out.length; i += 1) {
+      const len = out[i].to - out[i].from;
+      if (len > maxSec && (k === -1 || len > out[k].to - out[k].from)) k = i;
+    }
+    if (k === -1) break;                                 // 没有超标段了
+    const s = out[k];
+    const len = s.to - s.from;
+    if (!(len > 0)) break;
+    // 这一段要切成几片才 ≤maxSec（至少 2 片）；额度不够就按剩下的用完为止
+    const want = Math.max(2, Math.min(Math.ceil(len / maxSec - 1e-9), limit - out.length + 1));
+    out.splice(k, 1, ...evenSplit(s, want));
+  }
+  return out;
+}
+
+/** 把一段等分成 `k` 片；端点取原值，露点误差不会累积到总时长上 */
+function evenSplit(s, k) {
+  const parts = [];
+  const step = (s.to - s.from) / k;
+  for (let j = 0; j < k; j += 1) {
+    const from = j === 0 ? s.from : s.from + step * j;
+    const to = j === k - 1 ? s.to : s.from + step * (j + 1);
+    parts.push({
+      ...s, from, to,
+      t: (from + to) / 2,
+      cut: j === 0 ? s.cut : false,
+      via: 'time',
+    });
+  }
+  return parts;
+}
+
+/**
+ * **积分假切点切出来的帧，档位提 `MARK_BOOST`（3）档。**
  *
  * 真切点是"换镜头"，假切点是"这一段一直在变、攒够了才切"——后者没有硬边界，
- * 一帧代表不了多久，所以给更小的格子（1/1 → 1/3、1/4 → 1/6）。
+ * 一帧代表不了多久，所以给更小的格子（1/1 → 1/4、1/4 → 1/7）。
  *
  * 加在 `applyStrategy` **之前**：策略是全局偏向（quality 全体升一档），
- * 假切点的额外 +2 是内容驱动的，两者叠起来才能让"运动段"在任何策略下都比周围细。
+ * 假切点的额外加成是内容驱动的，两者叠起来才能让"运动段"在任何策略下都比周围细。
  */
 export const MARK_BOOST = 3;
 

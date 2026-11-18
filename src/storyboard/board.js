@@ -10,9 +10,8 @@
  *   换成三个真正决定画面的旋钮：**帧多少（maxFrames）、多大（strategy）、画布多大（budget）**。
  */
 
-import { readFileSync } from 'node:fs';
-
-import { configPath, readEnv } from './config.js';
+import { readEnv } from './config.js';
+import { configuredNumber, configuredText, readVideoFile } from './user-config.js';
 import {
   AUTO_STRATEGY, DEFAULT_STRATEGY, STRATEGIES, resolveStrategy,
   DEFAULT_BUDGET as TIER_DEFAULT_BUDGET,
@@ -36,12 +35,9 @@ export function autoStrategyEnabled() {
   if (env !== undefined && env !== '') {
     return !/^(0|false|off|no)$/i.test(String(env).trim());
   }
-  try {
-    const cfg = JSON.parse(readFileSync(configPath('video.json', process.env), 'utf8'));
-    const v = cfg?.storyboard?.auto;
-    if (typeof v === 'boolean') return v;
-    if (typeof v === 'string') return !/^(0|false|off|no)$/i.test(v.trim());
-  } catch { /* 没配置文件就是默认开 */ }
+  const v = readVideoFile()?.storyboard?.auto;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') return !/^(0|false|off|no)$/i.test(v.trim());
   return true;
 }
 
@@ -143,11 +139,23 @@ export function boardOptions(args = {}, { kind = 'board', frameSource = null } =
   const detail = args.detail ?? 'med';
   const geom = boardGeometry(args);
   // 旧名在这里就归一化（quality→full / frugal→compact…），下层的日志和清单只认新名
+  /**
+   * 用户级配置（配置目录下的 `video.json`，见 config.js）读一次，下面 strategy 和 tierMap 共用。
+   *
+   * 读一次而不是各读各的：这个函数在每次调用都会跑，多读一遍盘只为了省一行代码不划算。
+   */
+  const userCfg = readVideoFile();
+  const sbCfg = userCfg && typeof userCfg.storyboard === 'object' && !Array.isArray(userCfg.storyboard)
+    ? userCfg.storyboard
+    : {};
   const wanted = resolveStrategy(args.strategy);
-  // 不点名 → auto（可被关掉，见 autoStrategyEnabled）；点名就照办，`auto` 也是合法值
-  const strategy = wanted === AUTO_STRATEGY
+  const configuredStrategy = resolveStrategy(sbCfg.strategy);
+  // 不点名 → auto（可被关掉，见 autoStrategyEnabled）；点名就照办，`auto` 也是合法值。
+  // 调用方没传才看配置 —— 配置文件里的默认值不该压掉某一次调用的显式指定。
+  const picked = wanted || configuredStrategy;
+  const strategy = picked === AUTO_STRATEGY
     ? AUTO_STRATEGY
-    : (STRATEGIES[wanted] ? wanted : defaultBoardStrategy());
+    : (STRATEGIES[picked] ? picked : defaultBoardStrategy());
   const base = {
     input: args.input,
     from: args.from ?? 0,
@@ -164,8 +172,20 @@ export function boardOptions(args = {}, { kind = 'board', frameSource = null } =
     detail,
     ocr: ocrFor(args, detail),
     fetchOptions: fetchOptionsFor(args, kind, geom),
-    // 档位映射表原样透传（pipeline 在策略之后应用）
-    ...(args.tierMap && typeof args.tierMap === 'object' ? { tierMap: args.tierMap } : {}),
+    /**
+     * 档位映射表（pipeline 在策略之后应用）。
+     *
+     * 三层优先序，和 `cutFloor` 一致：本次调用显式传的 > `video.json` 的
+     * `storyboard.tierMap`（配置文件里的默认值）> 不传（不做映射）。
+     */
+    ...(() => {
+      const explicit = args.tierMap && typeof args.tierMap === 'object' && !Array.isArray(args.tierMap)
+        ? args.tierMap : null;
+      const configured = sbCfg.tierMap && typeof sbCfg.tierMap === 'object' && !Array.isArray(sbCfg.tierMap)
+        ? sbCfg.tierMap : null;
+      const m = explicit ?? configured;
+      return m && Object.keys(m).length ? { tierMap: m } : {};
+    })(),
     ...(typeof args.hotwords === 'string' ? { hotwords: args.hotwords } : {}),
   };
 
@@ -203,6 +223,35 @@ export function boardOptions(args = {}, { kind = 'board', frameSource = null } =
   return {
     ...base,
     strategy,
+    // 切点判定下限。三层优先序，与项目里其它配置一致：
+    //   ① 本次调用显式传的 args.cutFloor
+    //   ② video.json 里的 storyboard.cutFloor（配置文件里的默认值）
+    //   ③ 不传 —— scanShots 按口径取默认（mc:80 / abs:12）
+    // 这是"这段素材该怎么切"的入口：80 适合纪录片/电影，60 适合短视频/快剪。
+    ...(() => {
+      const explicit = Number(args.cutFloor);
+      const v = Number.isFinite(explicit) && explicit > 0
+        ? explicit
+        : configuredNumber(userCfg, 'storyboard.cutFloor', { min: 1, max: 255 });
+      return v ? { cutFloor: Math.min(255, Math.round(v)) } : {};
+    })(),
+    // 七道阈值取哪一套（`video.json` 的 `storyboard.tierCurve`）。
+    // 认不出来的名字在 thresholdsFor 里退回 docx，这里只负责把配置读出来。
+    ...(() => {
+      const v = configuredText(userCfg, 'storyboard.tierCurve');
+      return v ? { tierCurve: v } : {};
+    })(),
+    /**
+     * 帧率归一化（`storyboard.timeNormalize`，**默认开**）。
+     *
+     * 关了就是老口径：窗宽恒 100 帧，60fps 素材会被判成 2 档（30fps 是 4 档）。
+     * 只有"想复现旧分镜"时才该关。
+     */
+    ...(() => {
+      const v = configuredText(userCfg, 'storyboard.timeNormalize');
+      if (v === null || v === undefined || String(v).trim() === '') return {};
+      return { timeNormalize: !/^(0|false|off|no)$/i.test(String(v).trim()) };
+    })(),
     // **默认不封顶**：帧数由切点决定，张数由排布决定，用户要看多少就给多少
     maxFrames: clampFrames(args.maxFrames, 0),
     maxSheets: clampFrames(args.maxSheets, 0),

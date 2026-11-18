@@ -18,7 +18,13 @@ const EXE = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 
 test('findPipScript: 目录不存在时返回 null，不抛（这是它最常走的那条路）', async () => {
   const out = await findPipScript({ APPDATA: join(tmpdir(), 'definitely-not-here') });
-  assert.equal(out, null);
+  // darwin/Linux 还会扫真实安装目录（/opt/homebrew/bin、~/.local/bin），
+  // 本机真装了 yt-dlp 时会拿到路径而不是 null —— 契约是"不抛、返回路径或 null"，
+  // 不能断言一定是 null（上游也踩过：装了 yt-dlp 的机器上这条必红）。
+  if (out !== null) {
+    assert.equal(typeof out, 'string');
+    assert.match(out, /yt-dlp/);
+  }
 });
 
 test('findPipScript: 扫得到 %APPDATA%/Python/Python3xx/Scripts（win32）', {

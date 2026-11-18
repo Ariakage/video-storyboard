@@ -1,40 +1,65 @@
 #!/usr/bin/env node
 /**
- * probe — 只读容器头：片长、分辨率、帧率、音轨/字幕轨，以及建议的阅读顺序。
+ * probe — 只读容器头，不出图、不扫描、不转写。
  *
- *   node bin/probe.mjs <video-or-url> [--cookies cookies.txt] [--allow-anonymous] [--json]
+ * 为什么单独一个 bin：这是**最便宜的一步**。本地文件几毫秒，链接只解析不下载。
+ * 先 probe 再决定「要不要 9 格 / 要不要分段 / 有没有音轨」，能省掉一次盲试的全片扫描，
+ * 也就省掉那几张图的 vision token（实测一张 ≈222 token，文字索引另算）。
  *
- * 链接只解析元数据，**不下载**：probe 的全部价值就是便宜。
+ *   node bin/probe.mjs <video-or-url> [--json] [--cookies <cookies.txt>] [--allow-anonymous]
+ *
+ * ⚠️ 这里**没有** `--quality`：probe 不下载，清晰度是下载时才要决定的事。
+ * 加了就是个静默无效的开关。
  */
 import { args as parse } from './_args.mjs';
 import { probeVideo } from '../src/storyboard/probe.js';
 import { probeUrl } from '../src/storyboard/fetch.js';
-import { formatProbe, formatRemoteProbe } from '../src/storyboard/format.js';
 import { isHttpUrl } from '../src/storyboard/url.js';
+import { formatProbe, formatRemoteProbe } from '../src/storyboard/format.js';
 
-const opt = parse(process.argv.slice(2), { cookies: null, 'allow-anonymous': false, json: false });
-const input = opt._[0];
-if (!input) {
-  console.error('usage: node bin/probe.mjs <video-or-url> [--cookies cookies.txt] [--allow-anonymous] [--json]');
-  process.exit(2);
+const opt = parse(process.argv.slice(2), {
+  json: false, cookies: null, 'allow-anonymous': false,
+});
+
+if (opt.$unknown?.length) {
+  // 与 storyboard 的约定一致：不认识的开关要当场说出来，别静默忽略
+  console.error(`[warn] 未识别的参数：${opt.$unknown.map((k) => '--' + k).join(' ')}（已忽略）`);
 }
 
-const fetchOptions = {
-  cookies: opt.cookies ?? undefined,
-  allowAnonymous: opt['allow-anonymous'] === true,
-};
+const input = opt._[0];
+if (!input) {
+  console.error('用法: node bin/probe.mjs <video-or-url> [--json] [--cookies <file>] [--allow-anonymous]');
+  console.error('');
+  console.error('  只读容器头：时长 / 分辨率 / 帧率 / 有无音轨 / 链接的标题与格式。不上传、不出图、不下载。');
+  process.exit(1);
+}
 
 try {
+  let info;
+  let remote = false;
   if (isHttpUrl(input)) {
-    const remote = await probeUrl(input, fetchOptions);
-    if (opt.json) console.log(JSON.stringify({ kind: 'url', ...remote }, null, 2));
-    else console.log(formatRemoteProbe(remote));
+    remote = true;
+    info = await probeUrl(input, {
+      cookies: opt.cookies,
+      allowAnonymous: opt['allow-anonymous'] === true,
+    });
+    info.path = input;
   } else {
-    const info = { ...(await probeVideo(input)), path: input };
-    if (opt.json) console.log(JSON.stringify({ kind: 'file', ...info }, null, 2));
-    else console.log(await formatProbe(info));
+    info = { ...(await probeVideo(input)), path: input };
   }
-} catch (error) {
-  console.error(`probe failed: ${error.message}`);
+
+  if (opt.json) {
+    // --json 给脚本/管道用：`kind` 区分 file/url，`remote` 与上游字段名保持一致
+    console.log(JSON.stringify({ kind: remote ? 'url' : 'file', ...info, remote }, null, 2));
+  } else {
+    // formatRemoteProbe 是同步函数，await 无害但也别让人以为它是异步的
+    console.log(remote ? formatRemoteProbe(info) : await formatProbe(info));
+  }
+} catch (e) {
+  // 报错只打一句人话 + 原始信息，不打整段栈（CLI 场景他自己会看命令行）
+  console.error(`probe 失败：${e?.message || e}`);
+  if (!isHttpUrl(input)) {
+    console.error('  本地文件的话，先确认路径存在、并且 ffmpeg 能读（`ffmpeg -i <file>` 能看到时长）。');
+  }
   process.exit(1);
 }

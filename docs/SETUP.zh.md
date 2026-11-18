@@ -101,7 +101,7 @@ Chromium 127+ 启用了 **App-Bound Encryption**，`SESSDATA` 这类关键 cooki
 
 ```bash
 # 方式一：环境变量（推荐）
-setx VIDEO_STORYBOARD_COOKIES "D:\deepseek\3-Life\.secrets\cookies.txt"
+setx VIDEO_STORYBOARD_COOKIES "D:\cookies\cookies.txt"
 
 # 方式二：每次调用显式传
 node bin/storyboard.mjs "..." --cookies "D:/.../cookies.txt"

@@ -15,8 +15,9 @@ import { encodeRaw } from './sheet.js';
 import { charsForDetail, DETAIL_CHARS } from './board.js';
 import { describeMemory } from './memory.js';
 import { canTranscribe, resolveAsrConfig } from './asr.js';
+import { videoHelp } from './help.js';
 import {
-  AUTO_CANDIDATES, DEFAULT_STRATEGY, autoSheetCap, fitCanvas, imageTokens, pickAutoStrategy,
+  AUTO_CANDIDATES, AUTO_STRATEGY, DEFAULT_STRATEGY, autoSheetCap, fitCanvas, imageTokens, pickAutoStrategy,
   readabilityOf,
 } from './tiers.js';
 
@@ -224,7 +225,7 @@ export async function formatProbe(info) {
     lines.push(`      storyboard command: --max-frames ${estFrames} → up to ${estFrames} frames ` +
       `at ~${px.w}×${px.h} for the 1/3 tier, ~${perImage * estSheets} vision tokens.`);
     lines.push('    The tier is decided by cut density, not by you: fast-cutting stretches get 1/8-size ' +
-      'cells (100×56 on a 800-wide canvas), long takes get 1/1. Lower `strategy` to "saver"/"frugal" ' +
+      'cells (100×56 on a 800-wide canvas), long takes get 1/1. Lower `strategy` to `compact`/`skim` ' +
       'only when you accept blurrier cells in exchange for fewer images.');
   } else if (mins < 1) {
     lines.push(`under a minute (${info.duration.toFixed(0)}s): one call is enough.`);
@@ -316,12 +317,17 @@ export function formatTimeline(rows, { title = 'batch timeline' } = {}) {
   const total = rows.reduce((n, r) => n + (r.to - r.from), 0);
   const totalCells = rows.reduce((n, r) => n + r.cells, 0);
   const totalChars = rows.reduce((n, r) => n + (r.chars ?? 0), 0);
+  // 单张的钱从**默认画布**现算，别写死 800×450 = 233：
+  // fitCanvas 会把宽度对齐到 42px 计费格（798×449 = 222），写死就会把账报错。
+  const def = fitCanvas(16 / 9);
+  const perImage = imageTokens(def.width, def.height);
   const lines = [
     `# ${title}`,
     '',
     `- windows: **${rows.length}** · total ${tc(total)} · cells ${totalCells} · transcript ${totalChars} chars`,
-    `- tokens: ${rows.length} image(s) ≈ **${rows.length * imageTokens(800, 450)}** ` +
-      `(est. at the default 800x450 canvas; a wider canvas is billed by its own token grid, 42px 一格)`,
+    `- tokens: ${rows.length} image(s) ≈ **${rows.length * perImage}** ` +
+      `(est. at the default ${def.width}×${def.height} canvas = ${perImage} each; ` +
+      'a wider canvas is billed by its own token grid, 42px 一格)',
     '',
     '| # | window | cells | cuts | chars | image |',
     '|---|---|---|---|---|---|',
@@ -348,6 +354,8 @@ function formatPlanLine(plan) {
     .map(([k, v]) => (k === '0' ? `free×${v}` : `1/${k}×${v}`)).join(' ');
   const geo = [];
   if (plan.canvas) geo.push(`canvas=${plan.canvas.width}x${plan.canvas.height}`);
+  // 画面自带黑边时画布是照着**内容**算的：不说清楚，模型会以为比例错了
+  if (plan.trimmed) geo.push(`trimmed=${plan.trimmed.to} (bars cut, was ${plan.trimmed.from})`);
   // 报**最小格**：模型实际看到的最糊那一张就是它，报平均会让它高估小格的可读性
   if (plan.cell) geo.push(`cell>=${plan.cell.w}x${plan.cell.h} (${plan.cell.readability}, smallest)`);
   // 画布已裁到内容（图上不会有灰条），这个 fill 是**裁之前**占理想画布的比例
@@ -370,6 +378,41 @@ function formatPlanLine(plan) {
     `integral-marks=${plan.sampleMarks} · meanLufs=${fmt(i.meanLufs)} LUFS · ` +
     `motion=${fmt(i.motion)} · cuts=${fmt(i.cuts)} · ` +
     `cutThreshold=${fmt(i.scanThreshold)} · ${geo.join(' · ')}`;
+}
+
+/**
+ * 覆盖（#93）：**预算和覆盖是两笔账**，只报 token 不报"最长有多久没人看"，
+ * 读的人（尤其是模型）会自动把"便宜"读成"够用"。
+ *
+ * 而清单里 `cell 1 = 00:00.00-00:12.08` 这种区间会被当成"这 12 秒我看过" ——
+ * 实际只有 `frame@00:04.31` 这一瞬。所以这里按**实际发出的帧**算（`t_frame`），
+ * 不按格子算：`frames-merged:29->9` 时格子间距会小于真实采样间距，按格子算会系统性少报。
+ *
+ * 边界要写清楚：largest gap 只界定「有没有人看过」，**不界定「有没有漏掉事件」** ——
+ * 0.3 秒的手可以藏在 1.2 秒的空档里，它不能替代切点密度，两者要一起读。
+ */
+function formatCoverageLine(cells, window) {
+  if (!Array.isArray(cells) || cells.length === 0) return null;
+  const from = Number(window?.from ?? 0);
+  const to = Number(window?.to ?? 0);
+  if (!(to > from)) return null;
+  const marks = cells
+    .map((c) => (Number.isFinite(c.t_frame) ? c.t_frame : Number(c.t_start)))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+  if (marks.length === 0) return null;
+  // 两端也算"没人看的时段"：片头到第一帧、最后一帧到片尾
+  const edges = [from, ...marks, to];
+  let gap = 0;
+  let at = from;
+  for (let k = 1; k < edges.length; k += 1) {
+    const d = edges[k] - edges[k - 1];
+    if (d > gap) { gap = d; at = edges[k - 1]; }
+  }
+  // 只报实际值，不写 "≤"：撞上限就照实写（#89 的 longest 也是这个口径）
+  return `coverage: ${marks.length} frames over ${(to - from).toFixed(1)}s · ` +
+    `largest gap ${gap.toFixed(1)}s at ${tc(at)}–${tc(at + gap)} ` +
+    '(no frame inside that gap — it does not mean nothing happened there)';
 }
 
 /**
@@ -431,15 +474,23 @@ export function formatPlanPreview(result) {
     ? `cuts="${cuts} (avg ${(win.duration / cuts).toFixed(1)}s)"` : 'cuts="0 (no cut detected)"';
   const canvas = plan.canvas ?? { width: 0, height: 0 };
   const variants = Array.isArray(result.variants) ? result.variants : [];
-  const rec = pickAutoStrategy(variants)
-    ?? variants.find((v) => v.name === AUTO_CANDIDATES[0])?.name
-    ?? DEFAULT_STRATEGY;
+  // 失控被强行压过时，别推荐 full —— 那正是 344 张的那一版；推荐 auto 才会再走一次护栏。
+  const overBudget = plan.auto?.relaxed?.overBudget;
+  const rec = overBudget
+    ? AUTO_STRATEGY
+    : (pickAutoStrategy(variants)
+      ?? variants.find((v) => v.name === AUTO_CANDIDATES[0])?.name
+      ?? DEFAULT_STRATEGY);
   const lines = [
     `<storyboard-plan path="${info.path ?? 'video'}" duration="${info.duration.toFixed(2)}" ` +
       `window="${win.from.toFixed(2)}-${win.to.toFixed(2)}" ${cutsAttr} ` +
       `frames="${plan.produced}" image="none (dry run)" ` +
       'note="scan + layout only: no image, no frame decoded, no transcript" />',
     `canvas ${canvas.width}x${canvas.height} · ${plan.produced} frames for this window` +
+      `${plan.trimmed
+        ? ` · bars trimmed ${plan.trimmed.from} → ${plan.trimmed.to} (${plan.trimmed.padX}% left-right / `
+          + `${plan.trimmed.padY}% top-bottom were black)`
+        : ''}` +
       `${result.cached ? ' · scan reused from cache (0 s)' : ''}`,
     `strategy preview — one image at this canvas ≈ ${imageTokens(canvas.width, canvas.height)} vision tokens ` +
       '(42px token grid); the text index is billed ON TOP of that:',
@@ -449,8 +500,11 @@ export function formatPlanPreview(result) {
     lines.push(`  ${String(v.name).padEnd(9)} ${bins.padEnd(9)} smallest ${v.minW}x${v.minH} (${v.readability})`
       + (v.approx ? '   — also drops integral frames and merges cuts, so it can be fewer' : ''));
   }
-  lines.push(`recommended: **${rec}** — the cheapest policy that still keeps every cell readable ` +
-    '(>= "shot": you can tell whether two frames are the same shot).');
+  lines.push(overBudget
+    ? `recommended: **auto** — it caps the runaway ${overBudget}-image layout down to a sane bill `
+      + '(cells get smaller, but you still see every shot). Do NOT pass "full": that is the uncapped one.'
+    : `recommended: **${rec}** — the cheapest policy that still keeps every cell readable `
+      + '(>= "shot": you can tell whether two frames are the same shot).');
   // 张数预算是"按时长"算的（见 tiers.autoSheetCap）：三行张数是"不封顶"的代价，
   // 实际交付会先压到这段时长该有的张数，压到看不清才往回退。
   const cap = autoSheetCap(win.duration);
@@ -462,7 +516,11 @@ export function formatPlanPreview(result) {
     ? ` If you only need the gist, --strategy skim is ≤${auto.relaxed.skimBins} image(s) (1/8 cells).`
     : '';
   if (win.duration < 90) {
-    if (auto?.relaxed) {
+    if (auto?.relaxed?.overBudget) {
+      lines.push(`duration budget: ${win.duration.toFixed(0)} s window → uncapped this needs `
+        + `**${auto.relaxed.overBudget} images**; capped to **${auto.relaxed.keptBins}** at the cost of `
+        + `cell size. Pass maxSheets to change the cap.${skimHint}`);
+    } else if (auto?.relaxed) {
       lines.push(`duration budget: ${win.duration.toFixed(0)} s window → auto aimed at 1 image, but `
         + `${auto.relaxed.cuts} cuts is ${(win.duration / auto.relaxed.cuts).toFixed(1)} s per shot — `
         + `packing it into ${auto.relaxed.triedBins} sheet(s) left cells too small to tell shots apart, `
@@ -474,7 +532,12 @@ export function formatPlanPreview(result) {
   } else {
     const aim = `this window is ${(win.duration / 60).toFixed(1)} min, so auto aims at `
       + `**≤${cap} image(s)** (≈${minsPer} min of video each)`;
-    if (auto?.relaxed) {
+    if (auto?.relaxed?.overBudget) {
+      lines.push(`duration budget: ${aim} — but uncapped this needs **${auto.relaxed.overBudget} images** `
+        + `(≈${auto.relaxed.overBudget * imageTokens(canvas.width, canvas.height)} vision tokens). Capped to `
+        + `**${auto.relaxed.keptBins}** at the cost of cell size. Pass maxSheets to change the cap, `
+        + `or read shorter windows.${skimHint}`);
+    } else if (auto?.relaxed) {
       // 说了 aims at N 就必须解释为什么最后不是 N，否则模型会以为工具算错了
       lines.push(`duration budget: ${aim} — but ${auto.relaxed.cuts} cuts in this window is `
         + `${(win.duration / auto.relaxed.cuts).toFixed(1)} s per shot, and squeezing it into `
@@ -502,52 +565,21 @@ export function formatPlanPreview(result) {
 }
 
 /**
- * 完整说明书：**只在扫描是新鲜的时候印一次**（`!result.cached`）。
+ * 干跑时印一次说明书：**只在扫描是新鲜的时候**（`!result.cached`）。
  *
- * 为什么搬到这里：五个工具的 schema 每轮 API 请求都要重发一次，把调优细节写在参数描述里
+ * **正文不在这里** —— 在 `./help.js`，`video_help` 读的是同一份。以前这里另抄了一份，
+ * 改档位只改了一处，两份就开始说不同的话。
+ *
+ * 为什么只在干跑时印：五个工具的 schema 每轮 API 请求都要重发一次，把调优细节写在参数描述里
  * 等于按"轮数"收费（实测 22,855 字符 ≈ 14.9k token/轮）。挪进干跑结果只收一次钱，
  * 而且模型真要动手之前本来就会先干跑一次 —— 那时候它最需要这些数字。
- *
- * schema 里因此只留"调用前必须知道"的：类型、默认值、枚举。细节全在这里。
+ * schema 里因此只留"调用前必须知道"的：类型、默认值、枚举。
  */
 const DRY_RUN_MANUAL = [
   '',
   '── full manual (printed once, while the scan is fresh) ──',
   '',
-  'COST. Images bill by PIXELS on a 42px token grid, not by frame count: 800x450 = 233 tokens,',
-  'anything under 544x544 = 192 (the floor — drawing smaller saves nothing), 1300x1300 = 994',
-  '(the ceiling). A window costs ≈ Σ(cell pixel area) ÷ fill, so packing MORE frames into the',
-  'SAME canvas is nearly free, while opening one more image is not. The text index is billed on',
-  'top and is often the bigger bill: detail=med gives 120 chars per cell, low 60, high 400.',
-  '',
-  'STRATEGY, cheapest first: skim (all cells 1/8, no integral frames, cuts merged) · brief (skim',
-  'widened until the window fits ONE image) · compact (one tier smaller per frame) · standard',
-  '(1/1 frames shrunk to 1/2) · full (one tier BIGGER = more images AND more tokens).',
-  '"auto" (default) tries compact/standard/full on the same frames and keeps the cheapest whose',
-  'smallest cell is still readable, then prints what the others would have cost.',
-  '**Never pass "full" as a safe default** — it is the most expensive setting, not the most',
-  'complete; on a 191-cut 5-minute window it wants 59 images where compact wants 8.',
-  '',
-  'LONG FILM / EPISODE. Read in windows with `from` + `segment` (default 300 s): call once with',
-  'from:0, segment:300, then follow the `next: from=...` printed at the end of each result. A',
-  'one-shot overview of a 2-hour film shrinks every cell to 1/8 and still spoils the pacing.',
-  'Frames are what cost money, not window width — a long window does not cost more per frame.',
-  '',
-  'TUNING',
-  '  budget      pixels per image; below ~296000 saves nothing (the API upscales to the 544² floor).',
-  '  --max-frames  default 0 = no cap; a number merges the shortest segments first (fast-cut coverage).',
-  '  --max-sheets  default 0 = no cap; a number caps the bill but merges segments into longer frames.',
-  '  detail      chars per cell in the text index — the real lever on token cost.',
-  '  integralSeconds  accumulated change one sampled frame stands for (default 6), measured',
-  '              against a FIXED reference level: busy footage yields more frames, slow footage',
-  '              fewer. It is NOT "one frame every N seconds".',
-  '  --cell-range A-B + --text-only   page through a long index without paying for pictures again.',
-  '',
-  'WHAT YOU GET PER CALL. One frame per shot: cuts are detected first, an integral sampler adds',
-  'frames inside long moving shots, then a row-packing solver fills each image. Cells are numbered',
-  'across images — cite "cell 7" and run zoom --cell-id 7 for a close-up. The index never',
-  'prints the same sentence twice (a line shared by many cells is listed once and referenced as',
-  '"→ L1").',
+  videoHelp(),
 ].join('\n');
 
 /**
@@ -633,6 +665,9 @@ export function formatManifest(result, {
       // 音轨到底在不在，是这一层最容易被误读的事实（"no-key" 常被读成"视频没声音"）
       ` audio="${info?.hasAudio ? 'present' : 'absent'}"` +
       `${result.transcript?.source ? ` transcript="${result.transcript.source}"` : ''}` +
+      // 具体走了哪条轨（`site-cc:ai-zh` / `embedded` / `file:srt`）。`source` 只说"字幕"，
+      // 不说是站点 CC 还是容器内嵌 —— 排查时这两件事的处理方式完全不同（issue #86）
+      `${result.transcript?.model ? ` transcript-model="${result.transcript.model}"` : ''}` +
       (cellRange ? ` cells="${lo}-${hi} of ${total}"` : '') +
       (result.cuts?.length
         ? ` cuts="${result.cuts.length} (avg ${(result.window.duration / Math.max(1, result.cuts.length)).toFixed(1)}s)"`
@@ -650,6 +685,10 @@ export function formatManifest(result, {
   }
   const planLine = formatPlanLine(result.plan);
   if (planLine) lines.push(planLine);
+  // 覆盖行紧跟 plan：预算（token）和覆盖（多大一段没人看）必须并排出现，
+  // 否则"便宜"会被读成"够用"（#93）。
+  const coverageLine = formatCoverageLine(picked, result.window);
+  if (coverageLine) lines.push(coverageLine);
   // 预算落进地板档（<544²）时必须说明：画得更小一分钱不省，只会更糊。
   if (result.plan?.budgetRaisedFrom) {
     const used = result.plan.budget;
@@ -673,10 +712,16 @@ export function formatManifest(result, {
       // 压不出可读的格子时预算主动让步：钱多花了一点，但画面不是色块 —— 必须说出来，
       // 否则用户会以为"预算没生效"。
       const relaxed = auto.relaxed
-        ? ` Budget relaxed: ${auto.relaxed.cuts} cuts cannot fit ${auto.relaxed.targetCap} readable`
-          + ` image(s) (${auto.relaxed.triedBins} would be colour blocks), so this kept`
-          + ` ${auto.relaxed.keptBins} — legibility over the per-minute target. Narrow the window`
-          + ' (`from` + `segment`) if the bill matters more.' : '';
+        ? (auto.relaxed.overBudget
+          ? ` Uncapped this window would need **${auto.relaxed.overBudget} images**`
+            + `${plan.canvas ? ` (≈${auto.relaxed.overBudget * imageTokens(plan.canvas.width, plan.canvas.height)} vision tokens)` : ''}`
+            + `, so it was capped to ${auto.relaxed.keptBins} — small cells, but a sane bill.`
+            + ' Narrow the window or pass maxSheets to change the cap.'
+          : ` Budget relaxed: ${auto.relaxed.cuts} cuts cannot fit ${auto.relaxed.targetCap} readable`
+            + ` image(s) (${auto.relaxed.triedBins} would be colour blocks), so this kept`
+            + ` ${auto.relaxed.keptBins} — legibility over the per-minute target. Narrow the window`
+            + ' (`from` + `segment`) if the bill matters more.')
+        : '';
       lines.push(`size policy: auto chose **${auto.chosen}**`
         + `${chosen ? ` — smallest cell ${chosen.minW}x${chosen.minH} (${chosen.readability})` : ''}`
         + `${minsPerImage ? `, ≈${minsPerImage} min of video per image` : ''}${capped}.${relaxed}`);
@@ -716,6 +761,28 @@ export function formatManifest(result, {
   // 格子小到看不清时**主动说**，并给三条可执行的改法（旧版对"看不清"完全沉默）
   const advice = readabilityAdvice(result.plan);
   if (advice) lines.push(advice);
+  /**
+   * **静态长镜头：密度是按时间兜底的，不是数出来的**（issue #87）。
+   *
+   * 不说这一句，模型会以为"这段只有 N 个镜头"，于是照着 N 个格子讲 —— 而 PPT / 课件
+   * 这种片子一格里翻过好几页，中间的内容它根本没见过。说清楚之后它至少知道
+   * "要看细节得 `video_zoom`，或者 `from`+`segment` 分段扫"。
+   */
+  if (result.plan?.staticLongshot) {
+    const { frames, maxSec } = result.plan.staticLongshot;
+    // 报**实际最长那一格**，不是目标值：撞了帧数封顶时会有比 maxSec 更长的格子
+    // （issue #89 实测 39.6 秒），写死 "≤30s each" 等于让下游照着对不上账。
+    const longest = all.reduce(
+      (m, c) => Math.max(m, (Number(c.t_end) || 0) - (Number(c.t_start) || 0)), 0,
+    );
+    const shape = longest > maxSec + 0.05
+      ? `longest ${Math.round(longest)}s — ${maxSec}s each does not fit inside ${frames} frames`
+      : `≤${maxSec}s each`;
+    lines.push(`density: static-longshot fallback — this window has ≤1 hard cut, so frame placement `
+      + `cannot come from shot changes. Split by time instead (${frames} frames, ${shape}).`);
+    lines.push('  → 这类片子（PPT / 课件 / 单机位讲座）翻页不产生切点，一格里可能翻过好几页。'
+      + '要看清某一页：`video_zoom` 带上那一格的 from/to；要逐页扫：`from` + `segment` 分段调。');
+  }
   // 成本只报两件事：图数×token、ASR 秒数。CPU 秒数对模型没有决策价值。
   {
     const cost = [];
@@ -777,9 +844,17 @@ export function formatManifest(result, {
   }
   // 这一句专治"把格的起点当画面时刻"：标题板常常出现在格的中后段，
   // 不给 frame@ 的话，模型会以为格首就是标题板，整段判断提前几十秒。
-  if (plan.pick === 'sharp' && picked.some((c) => Number.isFinite(c.t_frame))) {
-    lines.push('frame@ = the exact moment the cell\'s picture was taken (sharpest of 3 candidates), ' +
-      'which is NOT the cell start — a title card showing at frame@ belongs to a cell that begins earlier.');
+  //
+  // #93 的更正：`frame@` 只在 **pick !== 'mid'** 时打，而 **默认就是 mid**（`board.js`：
+  // `pick: args.pick ?? 'mid'`）—— 所以默认配置下一格 `frame@` 都没有，模型照样会把格首
+  // 当成画面时刻。这条误读在默认路径上更常见，必须单独说一句。
+  if (plan.pick !== 'mid' && picked.some((c) => Number.isFinite(c.t_frame))) {
+    lines.push('frame@ = the exact moment the cell\'s picture was taken ('
+      + (plan.pick === 'thumb' ? 'histogram-closest frame' : 'sharpest of 3 candidates')
+      + '), which is NOT the cell start — a title card showing at frame@ belongs to a cell that begins earlier.');
+  } else if (plan.pick === 'mid' && picked.length > 0) {
+    lines.push('frame = the cell midpoint (pick:"mid", the default) — each picture is taken halfway '
+      + 'through its cell\'s span, not at the cell start. A title card can sit later in the same cell.');
   }
   if (picked.some((c) => c.broken)) {
     lines.push('a [m:ss.s] marker inside a cell means the speech breaks there: that cell covers two ' +
@@ -789,10 +864,17 @@ export function formatManifest(result, {
   // 不说的话，它会把"这格字看不清"归因成视频本身糊，而不是"扫描用的是低清版、细看要 zoom"。
   if (result.source) {
     const s = result.source;
-    lines.push(`source: ${s.url} (auth=${s.auth}${s.cached ? ', cached' : ''}); ` +
+    lines.push(`source: ${s.url} (auth=${s.auth ?? 'unknown'}${s.cached ? ', cached' : ''}); ` +
       `scanned at ${s.scanActual ?? s.scanHeight}p` +
       (s.maxAvailable ? `, source max ${s.maxAvailable}p` : '') +
       (s.zoomTarget ? `; zoom reads ${s.zoomTarget}p from the original stream` : '') + '.');
+    // yt-dlp 退出码非 0、但产物可用（#91）：必须说出来 —— 否则用户以为一次就成功了，
+    // 换台机器又撞同一个错，还以为是"网络不好"。
+    if (s.downloadWarning) {
+      lines.push(`warning: yt-dlp exited non-zero, but the downloaded file is usable ` +
+        `(${s.downloadWarning}). Check the yt-dlp config file (~/yt-dlp.conf) for options ` +
+        'like --embed-subs that fail during post-processing.');
+    }
     if (Array.isArray(s.degraded) && s.degraded.length > 0) {
       const cap = s.maxAvailable ? `${s.maxAvailable}p` : 'a lower tier';
       lines.push(`source limit: this video tops out at ${cap} (${s.degraded.join(', ')}) — ` +
@@ -809,7 +891,7 @@ export function formatManifest(result, {
         ? 'subtitles and the paid stream are'
         : gates.includes('subtitle') ? 'subtitles are' : 'the stream is';
       lines.push(`!! NEEDS LOGIN — this site hides ${what} from anonymous requests ` +
-        `(auth=${s.auth}). Do NOT guess the dialogue from burned-in text or scenes.`);
+        `(auth=${s.auth ?? 'unknown'}). Do NOT guess the dialogue from burned-in text or scenes.`);
       lines.push('   Ask the user for cookies before trusting any transcript: export cookies.txt from the ' +
         'browser and point "cookies" in the video.json config at it (README, "needs a signed-in video"). ' +
         'If the user cannot provide one, say so explicitly rather than presenting a partial transcript ' +
@@ -922,6 +1004,25 @@ export function formatManifest(result, {
   const sharedByCell = new Map();
   for (const g of shared) for (const i of g.cells) sharedByCell.set(i, g.id);
 
+  /**
+   * **重复但不够本抽 legend 的那几组**（issue #89 第 3 条）：后出现的那格写
+   * `→ same as cell 4`，不再把同一句话重印一遍。
+   *
+   * 抽 legend 的成本是表头一行（~24）+ 每格一个 `→ L1`；一句 30 字的台词只落在
+   * 两格时这笔账算不过来（净亏），于是以前两格各印一次 —— 用户看到的是"同一句
+   * 话占了两遍 token"。指针不用表头，19 个字就够，所以短句重复也有得赚。
+   * 阈值取 24 字：更短的句子指针反而更长。
+   */
+  const DUP_MIN_CHARS = 24;
+  const dupOf = new Map();
+  for (const [key, cells2] of groups) {
+    if (cells2.length < 2 || key.length < DUP_MIN_CHARS) continue;
+    if (sharedByCell.has(cells2[0])) continue;            // 已经进 legend 了
+    const first = Math.min(...cells2);
+    if (first < lo || first > hi) continue;               // 首现在别的分页里，指针指不到
+    for (const i of cells2) if (i !== first) dupOf.set(i, first);
+  }
+
   // ---- 压缩 ②：整窗同一档位时，别在每个格子上重复同一个 k=
   const tierSet = new Set(picked.map((c) => c.tier).filter((t) => Number.isFinite(t)));
   const uniformTier = picked.length > 1 && tierSet.size === 1 ? [...tierSet][0] : null;
@@ -962,7 +1063,9 @@ export function formatManifest(result, {
     const head = `cell ${c.i}${where} = ${tc(c.t_start)}-${tc(c.t_end)}` +
       (showFrame ? ` frame@${tc(c.t_frame)}` : '') +
       (c.cuts ? `  cuts ${c.cuts}` : '') + tierTag + markTag;
-    const body = ref ? `${head}  → ${ref}` : (text ? `${head}\n    ${text}` : head);
+    const body = ref ? `${head}  → ${ref}`
+      : (dupOf.has(c.i) ? `${head}  → same as cell ${dupOf.get(c.i)}`
+        : (text ? `${head}\n    ${text}` : head));
     if (used + body.length + 1 > maxChars) { stoppedAt = c.i - 1; break; }
     lines.push(body);
     used += body.length + 1;
@@ -1021,6 +1124,24 @@ export function formatManifest(result, {
     lines.push('  → 告诉用户：听音服务连不上（装了但没启动，或地址/端口不对），'
       + '不是这条片子没人说话 —— 起一下本机服务就好。');
   }
+  if (result.transcript?.source === 'subtitle-failed') {
+    /**
+     * **抓站点字幕这一步自己坏了**，不是"这视频没字幕"，也不是"没配 ASR"（issue #86）。
+     *
+     * 这两个动作对用户是完全相反的：一个去装/修 yt-dlp，一个去配听音服务。
+     * 以前它和 `no-key` 长得一模一样，只能靠猜。
+     */
+    const why = String(result.transcript.reason ?? 'failed');
+    const detail = String(result.transcript.detail ?? '').trim();
+    lines.push(`transcript: site subtitles FAILED (${why})` +
+      (detail ? `: ${detail.slice(0, 200)}` : '') +
+      ' — this is NOT "the video has no subtitles" and NOT "no ASR key": the subtitle fetch itself broke.');
+    lines.push(why === 'no-ytdlp'
+      ? '  → 告诉用户：这台机器上找不到 yt-dlp（读 B 站 CC 字幕要它）。装一个，或者把路径写进 '
+        + 'VIDEO_STORYBOARD_YTDLP / video.json（配置目录）；也可以直接给 ASR 配一个本地服务，两条路都行。'
+      : '  → 告诉用户：yt-dlp 装了但这次执行失败了（常见是子进程写不进临时目录、或 cookie 文件读不了）。'
+        + '先看上面 detail 里的原文；临时可以让它用本地文件跑，或先把 ASR 配上。');
+  }
   if (result.transcript?.source === 'no-key') {
     lines.push(`transcript: NOT attempted — this ASR backend needs a key and none is configured, so ` +
       'nothing was listened to. This is neither "no dialogue" nor a subtitle-track failure. Set the key ' +
@@ -1028,9 +1149,13 @@ export function formatManifest(result, {
       'a video with an embedded subtitle track.');
     // **必须让用户听到这句话，而不是让模型自己消化。** 否则模型只会说"我听不到声音"，
     // 用户以为插件坏了 —— 2026-11-01 评论区被问了十几遍的就是这件事。
-    lines.push('  → 先用一句中文告诉用户：这台机器没装听音（ASR），我只能看画面，听不到人声；'
-      + '装一次 sherpa-onnx 就永久解决（免费、不联网，约 15 分钟，docs/INSTALL.zh.md 第 3 步），'
-      + '或者给 B 站 cookie 让我读 CC 字幕。**不要**只说"我听不到"。');
+    // 三件事必须一次说清：①画面没问题，缺的只是台词；②免费路线到底是哪两条（历史上提示说
+    // sherpa-onnx、INSTALL 第 3 步却只写 FunASR，用户照着搜不到）；③cookie 那条路怎么落地。
+    lines.push('  → 先用一句中文告诉用户：**画面正常，只是没有台词** —— 这台机器没配听音（ASR），'
+      + '我只能看画面，没听声音。想让它有词，两条免费路线二选一（都不联网，约 15 分钟）：'
+      + 'sherpa-onnx（体积小、冷启动快）或 FunASR，两条的操作步骤都在 docs/INSTALL.zh.md 第 3 步；'
+      + '也可以给 B 站 cookie 让我直接读它的 CC 字幕（写进 video.json 的 cookies 字段，'
+      + '导出方式见 docs/CONFIG.zh.md §3，不需要装 ASR）。**不要**只说"我听不到"。');
   }
   if (result.transcript?.source === 'asr-empty') {
     lines.push('transcript: ASR ran and found no speech here — treat this as a video with no dialogue ' +
@@ -1062,7 +1187,7 @@ export function formatManifest(result, {
     // 源本来没有音轨 → 无解；这份副本没音轨 → 我们能修。所以对用户也分开说。
     lines.push(result.source?.audioMissing
       ? '  → 告诉用户：这条片子源站有声音，是**这次下载的副本**没带上音轨，能修（按上面那行做）。'
-      : '  → 告诉用户：这条片子**本身没有音轨**（不是插件没抓到声音），所以没有台词可引。');
+      : '  → 告诉用户：这条片子**本身没有音轨**（不是工具没抓到声音），所以没有台词可引。');
     // yt-dlp 自己的警告（"ffmpeg not found" 之类）比我们的推断更接近现场，缺音时一并给出
     const warns = result.source?.audioWarnings;
     if (Array.isArray(warns) && warns.length > 0) {
@@ -1075,7 +1200,12 @@ export function formatManifest(result, {
   // 追问时不必重新出图 —— 这张图就在上下文里，按格号引用即可（每省一次就是一张图的钱）。
   // 两行共约 100 字符，换掉一次重读（一张图的钱）—— 只要追问一次就赚回来。
   lines.push('sheet already in context: cite cells by number; zoom only for a narrower window.');
-  lines.push('per-cell times for verification: <name>.evidence.json');
+  // 证据文件**只在真落盘时**才提（CLI / `saveStoryboards`）。不写盘的路径没有证据文件，
+  // 以前这句是写死的 —— 模型照着去 temp 目录找，翻遍也找不到（issue #89）。
+  if (result.evidencePath) {
+    const name = String(result.evidencePath).split(/[\\/]/).pop();
+    lines.push(`per-cell times for verification: ${name}`);
+  }
   return lines.join('\n');
 }
 

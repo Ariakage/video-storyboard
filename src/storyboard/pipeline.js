@@ -24,19 +24,21 @@ import { cpus } from 'node:os';
 
 import { readEnv } from './config.js';
 
-import { probeVideo, DEFAULT_FFMPEG, DEFAULT_FFPROBE } from './probe.js';
+import { detectContentBox, probeVideo, DEFAULT_FFMPEG, DEFAULT_FFPROBE } from './probe.js';
 import { resolveInput } from './fetch.js';
 import {
-  packPrints, packedFps, refineCutsByWindow, scanShots, spikeCuts, suppressClose, unpackPrints,
+  packPrints, packedFps, scanShots, unpackPrints,
 } from './scan.js';
-import { tagCuts } from './flash.js';
+// 切点链路（5 个阶段的顺序 + 准入门槛）全部收口在 cuts.js
+import { resolveCuts } from './cuts.js';
 import { rememberSegments } from './locate.js';
 import { isOwned, keepAlive, scheduleStop } from './asr-lifecycle.js';
 import {
   AUTO_CANDIDATES, AUTO_STRATEGY, BIN_COST, DEFAULT_STRATEGY, MARK_BOOST, READABILITY_ORDER, STRATEGIES,
-  applyMarkBoost, applyStrategy, applyTierMap, autoSheetCap,
+  applyMarkBoost, applyStrategy, applyTierMap, autoSheetCap, shouldForceSheetCap,
   fitCanvas, pickAutoStrategy, resolveStrategy,
-  framesFromBounds, integralMarks, levelAt, levelCurve, readabilityOf, tierHistogram,
+  framesFromBounds, integralMarks, levelAt, levelCurve, readabilityOf, tierHistogram, thresholdsFor,
+  needsTimeFloor, splitStaticShots, STATIC_SHOT_MAX_FRAMES, STATIC_SHOT_MAX_SEC,
 } from './tiers.js';
 import { solve, toRects } from './pack.js';
 import { remember } from './memory.js';
@@ -64,13 +66,18 @@ export const BURN_MODES = ['index', 'none'];
  * @param {number} [opts.to] 窗口终点（秒）
  * @param {number|'auto'} [opts.threshold] 切点阈值
  * @param {number} [opts.scanGap] 切点近邻合并的秒数（0 = 关掉）
- * @param {'quality'|'balanced'|'saver'|'frugal'} [opts.strategy] 升降档策略
+ * @param {'auto'|'compact'|'standard'|'native'|'skim'|'full'|'brief'} [opts.strategy] 升降档策略
+ *   （旧名 quality/balanced/saver/frugal/thrifty/ultra 仍认，见 tiers.js 的 STRATEGY_ALIASES）
  * @param {number} [opts.maxFrames] 最多取多少帧（超过就合并最短的段）
- * @param {number} [opts.budget] 单图像素预算（不会超过 800×800）
+ * @param {number} [opts.budget] 单图像素预算（不会超过 1300×1300 = 1.69M）
  * @param {'sharp'|'mid'|'thumb'} [opts.pick]
  * @param {'index'|'none'} [opts.burn]
  * @param {(p:object)=>void} [opts.onProgress]
  */
+// 极静素材补刀的采纳判据随切点链路搬到了 cuts.js（见那边的阶段表）。
+// 这里 re-export 保持外部 import 路径不变（test/spike-fallback.test.mjs 就指着它）。
+export { shouldTakeSpikes } from './cuts.js';
+
 export async function runStoryboard(opts) {
   const {
     input: inputRaw,
@@ -82,6 +89,14 @@ export async function runStoryboard(opts) {
     // 例外：`thrifty`（恭喜发财档）自己带 `defaultScanGap: 0.35`，见下面 capGap。
     scanGap = 0,
     refineBursts = true,
+    // 打分口径：'mc'（默认，运动补偿占比）| 'abs'（历史整帧平均差）。见 scan.js 头注释。
+    scanMode = 'mc',
+    // 切点判定下限（0–255 刻度）。null = 按口径取默认（mc: 80 / abs: 12）。
+    // **这是"这段素材该怎么切"的判断入口**：80 适合纪录片/电影（长镜头、剪辑稀疏），
+    // 60 适合短视频/快剪（平均镜头 <3 秒）。实测 SHOT 27 段：60 比 80 召回 +10 个点、
+    // 刀数 +13%；BBC 11 集反过来，60 比 80 掉 3.2 个点。没有一个常数能两头讨好，
+    // 所以交给调用方（模型/用户）按素材类型选，见 tool-spec 里的说明。
+    cutFloor = null,
     // 取帧并发数：每路 ffmpeg 只解一帧，互不依赖。实测 154 帧（16 核 i9-12900HX）：
     // 4 路 9.65s / 8 路 6.58s / 12 路 5.68s / 16 路 5.56s / 24 路 6.44s（过了 16 就抢不到核）。
     // 取 0.75×核数：16 核 → 12，比 8 快 14%，又不像 24 那样把机械盘和内存带宽打满。
@@ -101,6 +116,17 @@ export async function runStoryboard(opts) {
     uniformTier = null,
     // 档位映射表：`{1:3, 5:4, 6:4}` —— 接在策略之后，调用方说啥就是啥（没写的档位原样保留）
     tierMap = null,
+    // 七道阈值取哪一套：`docx`（默认）/ `perceptual`（按人眼瞬时记忆定标）。
+    // 见 tiers.js 的 PERCEPTUAL_THRESHOLDS —— 同一批帧换这套表会排成更少、更小的格子。
+    tierCurve = null,
+    /**
+     * 帧率归一化（`~/.dsh/video.json` 的 `storyboard.timeNormalize`，默认开）。
+     *
+     * 关掉 = 老口径：窗宽恒 100 帧，于是 60fps 素材的窗只覆盖 1.67 秒、
+     * 算出的密度只有 30fps 的一半，档位整体偏低 2 档（格子面积差 4 倍）。
+     * 详见 `tiers.js` 头注释里的对照表。
+     */
+    timeNormalize = true,
     // 积分取帧（假切点）：真切点之间按"画面变化率的时间积分"补采样点，累够就触发、触发即清零。
     integral = true,
     integralSeconds = 6,
@@ -186,6 +212,23 @@ export async function runStoryboard(opts) {
   );
   const winDur = Math.max(0.2, winEnd - winStart);
 
+  /**
+   * **画面里真正有内容的那块矩形**（去掉黑边）。竖屏素材塞进横屏容器时，
+   * 四成的付费像素是黑的 —— 检测到就裁掉，画布比例也跟着内容走。
+   *
+   * 三条边界：
+   *   - 远程 URL 不探（ffmpeg 抓 URL 要带 UA/Referer，这里没有那套上下文）；
+   *   - 失败一律当"没有黑边"，宁可留着也不瞎裁；
+   *   - 只认"四边都在"的框：`detectContentBox` 内部已经做过理智检查。
+   */
+  const contentBox = /^https?:/i.test(String(input)) ? null : await detectContentBox({
+    input, width: info.width, height: info.height, duration: info.duration, ffmpegPath,
+  }).catch(() => null);
+  const padX = contentBox ? Math.max(0, (info.width - contentBox.w) / info.width) : 0;
+  const padY = contentBox ? Math.max(0, (info.height - contentBox.h) / info.height) : 0;
+  // 画布比例跟着**内容**走；没黑边时就是原来的 info.aspect
+  const viewAspect = contentBox ? contentBox.w / contentBox.h : info.aspect;
+
   let asrLife = null;
   let asrSeconds = null;
   let asrCached = null;
@@ -222,6 +265,9 @@ export async function runStoryboard(opts) {
   // 扫描结果按 (文件, 窗口, 阈值策略) 缓存：storyboard 之后的 zoom 能直接复用
   const key = cache ? await cacheKey({
     input, start: winStart, end: winStart + winDur, threshold, minGap: capGap,
+    // **门槛必须进键**：它直接决定 cuts。漏了就会出现"改了参数却拿到上一次结果的缓存" ——
+    // minGap 踩过一模一样的坑（见 cacheKey 的注释）。
+    cutFloor,
   }) : null;
   let scanMeans = null;
   let scanPrints = null;
@@ -244,6 +290,13 @@ export async function runStoryboard(opts) {
       const s = await scanShots({
         input, fps: info.fps, threshold, start: winStart, end: winStart + winDur,
         minGap: capGap, ffmpegPath, hwaccel, onProgress,
+        // 运动补偿口径（见 scan.js 头注释与 docs/REFERENCES.md）：
+        // 短视频 69.8→74.4、纪录片 86.1→89.4；代价是每帧打分 0.04→0.155 ms（整段扫描 +5%）。
+        // 想回到旧口径：runStoryboard({ scanMode: 'abs' })。
+        scoreMode: scanMode,
+        ...(Number.isFinite(Number(cutFloor)) && Number(cutFloor) > 0
+          ? { minCutScore: Number(cutFloor) }
+          : {}),
       });
       scanMeans = s.means;
       scanPrints = s.prints;
@@ -268,57 +321,18 @@ export async function runStoryboard(opts) {
   if (isOwned()) keepAlive();
   let cuts = scan.cuts;
 
-  // ---- 极静素材（PPT / 代码录屏 / 固定机位）：绝对阈值会漏掉"只改了几个像素"的翻页。
-  if (!precomputed && scan.stats.length > 20) {
-    const perSec = cuts.length / Math.max(1, winDur);
-    if (perSec < 0.25) {
-      const spikes = suppressClose(spikeCuts(scan.stats, { k: 4, minAbs: 4, halfWindow: 12 }), capGap);
-      if (spikes.length > cuts.length) cuts = spikes;
-    }
-  }
-
-  // ---- 爆点细扫：粗扫看不见 0.35s 以下的刀
-  let refinedBursts = [];
-  if (refineBursts && !precomputed && !textOnly) {
-    const r = refineCutsByWindow({
-      stats: scan.stats, coarseCuts: cuts, fps: info.fps, winStart, winDur,
-      coarseThreshold: scan.threshold ?? 0,
-    });
-    cuts = r.cuts;
-    refinedBursts = r.refined;
-  }
-
-  const trace = [];
-  if (hwaccelUsed) trace.push(`hwaccel:${hwaccelUsed}`);
-  // ---- 丐中丐档：**自适应加大切点最小间隔**，直到整段能装进一张图。
-  // 一张 1/8 档画布最多 8×8=64 格，留点余量取 56（格子会浮动到 1/7，那时只有 49 格）。
-  // 间隔是**对原始切点**逐轮放大的（不是在上一次结果上继续合并），所以单调、可复现。
-  if (STRATEGIES[strategy]?.fitOneSheet && !precomputed && cuts.length + 1 > 56) {
-    const ONE_SHEET = 56;
-    let gap = capGap > 0 ? capGap : 0.2;
-    let fitted = suppressClose(cuts, gap);
-    let rounds = 0;
-    while (fitted.length + 1 > ONE_SHEET && gap < 120 && rounds < 60) {
-      gap *= 1.3;
-      fitted = suppressClose(cuts, gap);
-      rounds += 1;
-    }
-    if (fitted.length < cuts.length) {
-      cuts = fitted;
-      trace.push(`cuts-merged:${scan.cuts.length}->${cuts.length}@gap${gap.toFixed(1)}s`);
-    }
-  }
-
-  // ---- 给每个切点打类型标签（flash / white / black / hardcut / dissolve / motion）。
-  // **一个都不删**：删掉误检会让这段在插件眼里变成"完全静止"。
-  if (!precomputed && !textOnly && Array.isArray(scanPrints) && scanPrints.length) {
-    cuts = tagCuts(cuts, {
-      prints: scanPrints,
-      means: scanMeans,
-      fps: info.fps,
-      scores: scan.stats?.map((s) => s.score),
-    });
-  }
+  // ================================================================ 切点链路
+  // 五个阶段的编排全部收口在 cuts.js（那边有顺序表和不许乱插的说明）。
+  // 这里只负责把上下文喂进去 —— 别在本函数里再加"改 cuts 的步骤"。
+  const cutChain = resolveCuts({
+    scan, scanMode, capGap, strategy, refineBursts, textOnly, precomputed,
+    fps: info.fps, winStart, winDur,
+    prints: scanPrints, means: scanMeans,
+  });
+  cuts = cutChain.cuts;
+  const refinedBursts = cutChain.refinedBursts;
+  const trace = cutChain.trace;
+  if (hwaccelUsed) trace.unshift(`hwaccel:${hwaccelUsed}`);
 
   // ---- 台词：显式文件 > 字幕轨 > ASR；三者都没有就静默跳过（绝不让分镜失败）
   const transcriptResult = await transcriptP;
@@ -344,6 +358,20 @@ export async function runStoryboard(opts) {
     .map((seg) => ({ ...seg, from: seg.from - winStart, to: seg.to - winStart }))
     .filter((seg) => seg.to > 0 && seg.from < winDur);
   const transcriptChars = relSegments.reduce((n, seg) => n + String(seg.text ?? '').length, 0);
+  /**
+   * 转写 → `locate.js` 的进程内缓存（`video_locate` 全靠它）。
+   *
+   * 以前这里只有一句 `import { rememberSegments }`，**全文件一次都没调用** —— 于是
+   * `recallSegments()` 永远拿到 null，`video_locate` 在刚跑完分镜之后仍然报
+   * "no transcript available"（#94）。写在这里是因为它是所有出图路径的必经点。
+   *
+   * 两处口径不能换：
+   *   - key 用 `input`（= `resolveInput()` 的绝对路径），对端是
+   *     `tools/locate.js` 的 `recallSegments(resolved.path)`；
+   *   - 值用 `transcriptInfo.segments`（**绝对时间轴**）。`relSegments` 已经减过
+   *     `winStart`，喂给 locate 会把匹配到的时间整体提前一个窗口。
+   */
+  if (transcriptInfo?.segments?.length) rememberSegments(input, transcriptInfo.segments);
   const externalSource = sourceInfo?.url ?? info.path ?? null;
   const suspectInjection = findInjection(
     [
@@ -375,8 +403,11 @@ export async function runStoryboard(opts) {
   // 三件事必须一起做：**帧数影响档位序列，档位序列决定张数**。所以当调用方要求
   // "最多几张图"（zoom / 陪看都是一张）时，只能减少帧数再重排 —— 不能事后砍掉尾图，
   // 那会让最后一格覆盖半分钟却只给一帧。
-  const curve = levelCurve({ duration: winDur, fps: info.fps, cuts: absCuts });
-  const canvas = fitCanvas(info.aspect, { maxSide: maxCanvasSide, budget });
+  const curve = levelCurve({
+    duration: winDur, fps: info.fps, cuts: absCuts, thresholds: thresholdsFor(tierCurve),
+    timeNormalize,
+  });
+  const canvas = fitCanvas(viewAspect, { maxSide: maxCanvasSide, budget });
   // 排布沿用"按行凑满"（fillRows: true）：放开它虽然填充率更高，但**张数会涨**（5 → 7），
   // 那是舍本逐末 —— 一张图的钱按它自己的像素算（tiers.imageTokens）：多一张就多一份像素地板
   // 加上填充损失，所以"少开一张"仍然划算，但别再把它当成常数。`fillRows:false` 留给调用方自己选。
@@ -384,7 +415,7 @@ export async function runStoryboard(opts) {
   // PACK / activeStrategy 是**可变的**：auto 要拿同一批帧把三个候选各排一次再挑，
   // 所以 build() 读的是当前生效的那一对，而不是闭包里钉死的一个。改完这里必须把
   // activeStrategy/PACK 还原成最终选中的那个，后面 trimTail / fillGaps 还在用。
-  const packFor = (name) => ({ stretch: 0.2, binCost: BIN_COST[name] ?? 1.02, fillRows: true });
+  const packFor = (name) => ({ binCost: BIN_COST[name] ?? 1.02, fillRows: true });
   let activeStrategy = strategy;
   let PACK = packFor(activeStrategy);
   // 低于 minFrames 就把最长的段反复二等分（zoom / 陪看用）
@@ -410,12 +441,34 @@ export async function runStoryboard(opts) {
     return out;
   };
 
+  /**
+   * 这一版是不是走了"静态长镜头按时间兜底"（issue #87）。由 `build()` 每次重算，
+   * 最终留下的是最后一版（也就是真正被采用的那一版）的值。
+   */
+  let timeFloor = null;
+
   const build = (cap) => {
     let sg = framesFromBounds({
       duration: winDur, start: winStart, cuts: absCuts, marks: sampleMarks, maxFrames: cap,
     });
     if (Number(minFrames) > 1) sg = ensureMinFrames(sg, Math.min(24, Math.round(Number(minFrames))));
-    // 档位 = 切点密度；假切点段额外 +2 档（那里画面在连续变化，一帧代表不了多久）
+    /**
+     * **切点撑不起密度时按时间兜底**（issue #87）。
+     *
+     * 一段 164 秒的幻灯片讲解只有 1 个切点 → 整片被当成一个镜头、一格 41 秒，
+     * 中间翻过去的页面全看不见，清单还不吭声。这里只在这个窗口"几乎没有切点"时
+     * 按时间切开（每段 ≤ 30 秒，总量封顶 8 帧；调用方给了 maxFrames 就听他的）。
+     */
+    const floored = needsTimeFloor({ segs: sg, duration: winDur });
+    if (floored) {
+      sg = splitStaticShots(sg, {
+        cap: Number.isFinite(capFrames) ? Math.min(capFrames, STATIC_SHOT_MAX_FRAMES) : STATIC_SHOT_MAX_FRAMES,
+      });
+    }
+    // 清单要说出去：这段的密度不是"算出来的"，是"按时间兜底撑起来的"。
+    // **记在这里而不是回头从 segs 里找 `via:'time'`**：补位会重组段、把标记冲掉。
+    timeFloor = floored ? { frames: sg.length, maxSec: STATIC_SHOT_MAX_SEC } : null;
+    // 档位 = 切点密度；假切点段再加 MARK_BOOST 档（那里画面在连续变化，一帧代表不了多久）
     const base = sg.map((s) => levelAt(curve, s.t - winStart));
     const raw = applyMarkBoost(base, sg);
     let tr = applyStrategy(raw, activeStrategy);
@@ -426,7 +479,7 @@ export async function runStoryboard(opts) {
       const k = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(sg.length))));
       tr = sg.map(() => k);
     }
-    return { segs: sg, raw, tiers: tr, plan: solve(tr, { stretch: 0.2, ...PACK }) };
+    return { segs: sg, raw, tiers: tr, plan: solve(tr, PACK) };
   };
   const minCellOf = (b) => {
     const minW = Math.min(...b.plan.cells.map((c) => Math.round(c.w * canvas.width)));
@@ -450,7 +503,7 @@ export async function runStoryboard(opts) {
     if (b.plan.bins <= cap) return b;
     for (let bump = 1; bump <= 7; bump += 1) {
       const tr = b.tiers.map((t) => (Number(t) === 0 ? 0 : Math.min(8, Number(t) + bump)));
-      const p = solve(tr, { stretch: 0.2, ...PACK });
+      const p = solve(tr, PACK);
       if (p.bins <= cap) return { ...b, tiers: tr, plan: p };
     }
     return null;                                  // 全压到 1/8 还装不下 → 交给减帧
@@ -533,7 +586,7 @@ export async function runStoryboard(opts) {
     const from = lastBin[0].seq;
     for (let step = 1; step <= 2; step += 1) {
       const bumped = b.tiers.map((t, i) => (i >= from ? Math.min(8, t + step) : t));
-      const p2 = solve(bumped, { stretch: 0.2, ...PACK });
+      const p2 = solve(bumped, PACK);
       if (p2.bins < b.plan.bins) return { ...b, tiers: bumped, plan: p2 };
     }
     return b;
@@ -567,9 +620,11 @@ export async function runStoryboard(opts) {
   };
   const deficitOf = (plan) => binFills(plan).reduce((n, [, a]) => n + Math.max(0, FILL_TARGET - a), 0);
 
-  const fillGaps = (b) => {
+  const fillGaps = (b, maxFrames = Infinity) => {
     let cur = b;
     const startFrames = b.segs.length;
+    /** 补位也不许越过调用方给的 maxFrames（默认 Infinity 等于不限）。 */
+    const fits = (segs) => segs.length <= maxFrames;
     // **不许因为补位多开图**：多一张就多付一张的钱（≈233 @800×450），补位只该在现有张数里找缝。
     const binCap = b.plan.bins;
     for (let round = 0; round < 10; round += 1) {
@@ -602,7 +657,8 @@ export async function runStoryboard(opts) {
           const segs2 = [...cur.segs.slice(0, first), ...newSegs, ...cur.segs.slice(last + 1)];
           const tiers2 = [...cur.tiers.slice(0, first),
             ...new Array(small).fill(tier), ...cur.tiers.slice(last + 1)];
-          const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
+          if (!fits(segs2)) continue;
+          const p2 = solve(tiers2, PACK);
           if (readEnv('planDebug', process.env)) {
             console.error(`[fillGaps] coarsen bin=${worst.bin} ${nb}->${small} tier=${tier}`
               + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
@@ -642,7 +698,8 @@ export async function runStoryboard(opts) {
           const segs2 = [...cur.segs.slice(0, first), ...newSegs, ...cur.segs.slice(last + 1)];
           const tiers2 = [...cur.tiers.slice(0, first),
             ...new Array(sq).fill(tier), ...cur.tiers.slice(last + 1)];
-          const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
+          if (!fits(segs2)) continue;
+          const p2 = solve(tiers2, PACK);
           if (readEnv('planDebug', process.env)) {
             console.error(`[fillGaps] uniform bin=${worst.bin} ${nb}->${sq} tier=${tier}`
               + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
@@ -687,7 +744,8 @@ export async function runStoryboard(opts) {
           segs2.splice(c2.i, 1, ...ps);
           tiers2.splice(c2.i, 1, cur.tiers[c2.i], cur.tiers[c2.i]);
         }
-        const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
+        if (!fits(segs2)) continue;
+        const p2 = solve(tiers2, PACK);
         if (readEnv('planDebug', process.env)) {
           console.error(`[fillGaps] bin=${worst.bin} n=${n} toSquare=+${toSquare}`
             + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
@@ -708,7 +766,8 @@ export async function runStoryboard(opts) {
           const parts = splitSeg(cur.segs[pick.i], frac);
           segs2.splice(pick.i, 1, ...parts);
           tiers2.splice(pick.i, 1, cur.tiers[pick.i], 0);
-          const p2 = solve(tiers2, { stretch: 0.2, ...PACK });
+          if (!fits(segs2)) continue;
+          const p2 = solve(tiers2, PACK);
           if (readEnv('planDebug', process.env)) {
             console.error(`[fillGaps] bin=${worst.bin} free-filler seg=${pick.i}`
               + ` -> bins=${p2.bins} fill=${p2.fill.toFixed(3)}`
@@ -726,8 +785,9 @@ export async function runStoryboard(opts) {
     }
     return cur;
   };
-  // **显式限帧就不补**：调用方说"最多 4 帧"就是 4 帧，补到 5 帧是违约。
-  if (!Number.isFinite(capFrames)) built = fillGaps(built);
+  // 补位不能只在不限帧时跑：显式给 maxFrames 时同样可以补到上限，
+  // 否则 `maxFrames: 12` 反而比默认的 4 帧更少（issue #87）。补位内部有 fits() 守上限。
+  built = fillGaps(built, capFrames);
 
   // ---- auto 的张数预算：按时长压，但**不许把画面压成色块**
   //
@@ -742,7 +802,10 @@ export async function runStoryboard(opts) {
     const tidy = (cap) => {
       let b = buildWithin(autoName, cap);
       b = trimTail(b);
-      if (!Number.isFinite(capFrames)) b = fillGaps(b);
+      // 和上面那条一样：压张数时补位也照跑，只受 `capFrames` 约束。
+      // 原来这里是 `if (!Number.isFinite(capFrames)) b = fillGaps(b)` —— 显式给 maxFrames 时
+      // 压张数这一路又会把补位关掉，同一个 bug 换了个入口（#87）。
+      b = fillGaps(b, capFrames);
       return b;
     };
     // 预算：调用方显式给的 maxSheets 优先，否则就是 autoSheetCap 那个数。
@@ -773,21 +836,32 @@ export async function runStoryboard(opts) {
         built = capped;
         autoPlan = { ...autoPlan, capSheets: capUsed };
       } else if (capped && capped.plan.bins < built.plan.bins) {
-        // 压不出可读的最小格 → 退回不封顶（钱让位给可读性），但要留下原因。
-        // 同时算一下 skim 的张数：那是另一条路（全 1/8、不要假切点、切点按 0.35s 合并），
-        // 张数最少但最糊。不替调用方做决定，只把价码摆出来让它自己选。
+        // 压不出可读的最小格。**默认**退回不封顶（钱让位给可读性），但要留下原因。
+        //
+        // 例外：不封顶到了荒唐的量级。bbc_02（49 分钟纪录片、316 刀、305 帧是 1 档大格）
+        // 不封顶要 **344 张图 ≈ 8 万 token**——那不是"多花一张"，是失控。
+        // 这种情况下宁可交小格子：把压到 4× 预算的那一版留下，并在清单里说清楚。
         const skimTiers = applyStrategy(built.raw, 'skim');
-        autoPlan = {
-          ...autoPlan,
-          relaxed: {
-            targetCap: autoTargetCap,
-            triedBins: capped.plan.bins,
-            keptBins: built.plan.bins,
-            cuts: absCuts.length,
-            // 上限：skim 还会丢积分帧 + 合并切点，真实张数只会更少
-            skimBins: solve(skimTiers, packFor('skim')).bins,
-          },
+        const runaway = shouldForceSheetCap(built.plan.bins, limit);
+        const note = {
+          targetCap: autoTargetCap,
+          triedBins: capped.plan.bins,
+          keptBins: built.plan.bins,
+          cuts: absCuts.length,
+          // 上限：skim 还会丢积分帧 + 合并切点，真实张数只会更少
+          skimBins: solve(skimTiers, packFor('skim')).bins,
         };
+        if (runaway) {
+          built = capped;
+          autoPlan = {
+            ...autoPlan,
+            capSheets: capUsed,
+            forced: true,
+            relaxed: { ...note, keptBins: capped.plan.bins, overBudget: note.keptBins },
+          };
+        } else {
+          autoPlan = { ...autoPlan, relaxed: note };
+        }
       }
     }
   }
@@ -840,11 +914,24 @@ export async function runStoryboard(opts) {
     // 清单里要把"不限"说出来：写个 0 会让模型以为只能取 0 帧
     maxFrames: Number.isFinite(capFrames) ? capFrames : 0,
     markBoost: MARK_BOOST,
+    // 密度兜底：`{ frames, maxSec }` —— 清单据此说明"这段没有切点，是按时间撑起来的"
+    ...(timeFloor ? { staticLongshot: timeFloor } : {}),
     budget,
     // 地板抬升：{ requested: 230000, used: 295936 } —— 清单要说明"比它更小不省钱"
     ...(budgetFloorRaisedFrom && budgetFloorRaisedFrom !== budget
       ? { budgetRaisedFrom: budgetFloorRaisedFrom } : {}),
     canvas: { width: canvas.width, height: canvas.height },
+    // 画面自带黑边（竖屏素材塞进横屏容器最常见）：清单要说明画布比例是照着**内容**算的。
+    // 只在真裁了东西时才报 —— 没有黑边也写一行 "trimmed 1280x720 → 1280x720"，
+    // 模型会以为这次做过什么处理。
+    ...(contentBox && (padX > 0.005 || padY > 0.005) ? {
+      trimmed: {
+        from: `${info.width}x${info.height}`,
+        to: `${contentBox.w}x${contentBox.h}`,
+        padX: +(padX * 100).toFixed(0),
+        padY: +(padY * 100).toFixed(0),
+      },
+    } : {}),
     // **最小格**是清单该报的那个数：模型看到的就是最小那格的可读性
     cell: {
       w: minCellW, h: minCellH,
@@ -1013,14 +1100,14 @@ export async function runStoryboard(opts) {
     }));
     const got = await extractFramesBatched({
       input, jobs: list, fps: info.fps, ffmpegPath,
-      srcW: info.width, srcH: info.height,
+      srcW: info.width, srcH: info.height, crop: contentBox,
       // 扫描已经按 (ffmpeg, input) 探过一次，这里直接命中进程内缓存；没探过就是 null
       hwaccel: await resolveHwaccel({ ffmpegPath, input }),
       // 批量块是"解码 20 秒"的重活，开太多路会互相抢解码器；实测 4 路已接近线性
       concurrency: Math.max(2, Math.min(4, Math.round(frameConcurrency / 3))),
       fallback: async (j) => extractFrameWithFallback({
         input, remote: null, at: j.at, dur: 0,
-        cellW: j.cellW, cellH: j.cellH, ffmpegPath, pick,
+        cellW: j.cellW, cellH: j.cellH, ffmpegPath, pick, crop: contentBox,
       }),
     });
     for (const [k, v] of got) shotOf.set(k, v);
@@ -1028,7 +1115,7 @@ export async function runStoryboard(opts) {
     for (const batch of batches) {
       const shots = await mapPool(batch, frameConcurrency, async (j) => extractFrameWithFallback({
         input, remote: remoteFrame, at: j.cell.t, dur: 0,
-        cellW: j.rect.pw, cellH: j.rect.ph, ffmpegPath, pick,
+        cellW: j.rect.pw, cellH: j.rect.ph, ffmpegPath, pick, crop: contentBox,
       }));
       for (let i = 0; i < batch.length; i += 1) shotOf.set(`${batch[i].si}:${batch[i].k}`, shots[i]);
     }

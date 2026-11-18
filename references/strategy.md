@@ -25,9 +25,17 @@ Cell size is therefore information, not decoration.
 | `compact` | one tier smaller per frame | clear and cheap |
 | `skim` | all 1/8, integral sampling off, cuts merged at 0.35 s | one PV → one image |
 | `brief` | all 1/8, cut spacing widened until the whole clip fits one image | 5-minute clip in one look |
+| `native` | density-computed tier used as-is (no bump) | base for `--tier-map` experiments |
 
 `auto` can be disabled with `VIDEO_STORYBOARD_AUTO=0` (or `{"storyboard":{"auto":false}}` in
 `video.json`), which falls back to `compact`.
+
+Two `video.json` knobs tune the density math itself: `"storyboard": { "cutFloor": 80 }` sets the
+cut-score floor (0–255; 80 suits documentary/film, 60 suits fast-cut content — lower detects more
+shots), and
+`"storyboard": { "timeNormalize": false }` restores the pre-0.7 behaviour where the convolution
+window stayed a fixed 100 frames regardless of fps (default normalises window, smoothing and
+thresholds by `fps / 30`, so 24/30/60/120 fps sources get the same tiers).
 
 Old names map automatically: `quality→full`, `balanced→standard`, `saver/frugal→compact`,
 `thrifty→skim`, `ultra→brief`.

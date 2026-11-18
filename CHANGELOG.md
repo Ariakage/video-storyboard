@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.2.0] - 2026-11-19
+
+> **同步上游 0.6.5–0.7.6**（SAOS-3624/dsh-video-storyboard，79 个提交）到通用 Skill 分支。
+> 上游的 DSH 插件层（设置页、宿主 speechToText 注册、tool schema、attachment 提交）依旧不带；
+> 核心管线、切点编排、排布、Python/二进制发现与 CLI 改进全部合入。
+
+### 合入的上游改进
+
+- **切点编排独立成 `cuts.js`**：静态长镜头按"采样间隔上限"补帧（`fillGaps`，#87），
+  `maxFrames` 回归"上限"语义 —— 只封顶张数，不再关掉补帧（#88）。
+- **不拿真画面换省钱**：格子不再 cover 裁真内容；画面自带黑边反而裁掉、画布比例跟内容走；
+  竖屏长边对齐 42px 计费行；行内打包矩形做边界钳制（#64、#72）。
+- **扫描更稳**：运动补偿/robust 两种打分模式；帧率以归一化时间轴为基准，采样不再随
+  变帧率源漂移（#90）；默认取帧点改 `mid`、清单头新增 `coverage:` 行报"最大空档"（#93）。
+- **`video-probe` CLI**：本地几毫秒、链接只解析不下载（上游 0.7.5）。
+- **Python 发现跨平台重写**：macOS Homebrew/MacPorts/python.org/pyenv/asdf/conda、
+  Windows `Python3xx` 安装目录都进候选链，不再只认 PATH（#92）；候选目录按目标平台拼路径。
+- **二进制发现**：区分"不存在"和"读不到"（statSync 保留 errno），沙箱可见性报错不再误导（#76）；
+  `cwd`/工作区候选目录；Windows 子进程 `windowsHide`（#37）。
+- **yt-dlp**：四处调用统一 `--ignore-config`，退出码非 0 但产物可用时降级成 warning
+  写入清单 `downloadWarning`（#91）；媒体目录磁盘空间检查（#74/#75）、活跃媒体目录不被清理（#81）。
+- **转写/字幕**：`rememberSegments()` 真正接进管线 —— 同进程 locate 不再白跑 ASR（#94）；
+  抓站点字幕失败在清单里明确区分"字幕坏了 / 没配 ASR / 真没台词"（#86）；字幕轨与硬字幕交叉校验（#70）。
+- **配置**：`tierMap` 整数校验（#84）、`cutFloor` / 时间归一化开关进 `video.json`；
+  策略新增 `native`（按宿主原生档位出图）。
+- **清单/报错**：pack 缓存键与 stretch/crop 行为修正；默认 `pick: mid` 与 max gap 写进清单（#93）。
+
+### 保留的 Skill 层
+
+- `SKILL.md`、`references/`、中立 `video-*` CLI、`VIDEO_STORYBOARD_*` 环境变量与 `config.js`
+  全部保留；`DSH_*` 继续作为兼容别名。
+- 上游新增的 `src/storyboard/user-config.js` 改成适配层 —— 实际读写仍走 `config.js`
+  的中立配置目录，不认 `~/.dsh` 为唯一来源。
+- `src/storyboard/help.js` 是 `format.js` 的依赖（dry-run 手册），文案改成本仓库 CLI 说法。
+- 未合入：`src/settings/*`、`src/tools/*`、`src/index.js`、`lib/client.js`、
+  `src/storyboard/register.js` / `tool-spec.js` / `offload.js`、插件清单与设置页测试。
+
 ## [1.1.0] - 2026-11-03
 
 > **同步上游 0.6.1–0.6.4**（SAOS-3624/dsh-video-storyboard）到通用 Skill 分支。
@@ -72,6 +109,558 @@
 
 - 管线现在把本次转写交给 `rememberSegments()`，同进程的 locate 不再白跑一次 ASR。
 - `formatMatches` 的提示改为命令行说法，不再指向已不存在的 `video_zoom` 工具。
+## [0.7.6] - 2026-11-16
+
+### Fixed — `video_locate` 永远报 no transcript：`pipeline.js` 只 import 从不调用（#94）
+
+`locate.js` 的进程内缓存（`rememberSegments` / `recallSegments`）写得好好的，但
+`pipeline.js` **只有那一行 import，全文件一次都没调用** —— 于是刚跑完 `video_storyboard`
+立刻调 `video_locate`，仍然是 `no transcript available for this file`。
+0.7.2 / 0.7.4 / 0.7.5 三个版本都是这个状态，社区每次 install 后要手工重打一遍补丁。
+
+- 写入点放在 `relSegments` / `transcriptChars` 之后：那是所有出图路径的必经之处，
+  `textOnly` 的补跑（`tools/locate.js` 的第二条路）也走这里。
+- key 用 `input`（`resolveInput()` 的绝对路径），对端是 `recallSegments(resolved.path)`。
+- 值用 `transcriptInfo.segments`（**绝对时间轴**）。`relSegments` 已经减过 `winStart`，
+  喂过去会让命中时间整体提前一个窗口。
+- 回归测试守的是**调用点存在**，不是缓存本身 —— 往返测试一直是绿的，坏的就是"没人调用"。
+
+### Fixed — ubuntu CI 上 2 条 win32 用例红：真实文件系统的路径不能按目标平台拼
+
+上一条跨平台隔离改得过头了：`pythonInstallDirs()` 里 `LOCALAPPDATA` / `ProgramFiles` / `C:\`
+这些 **要拿去 `readdirSync` 的真实路径**也跟着 `pathFor('win32')` 拼。在 Linux/macOS 上跑
+`platform:'win32'` 的用例时，`win32.join('/tmp/x', …)` 会拧成 `\tmp\x`，扫出空数组
+（Actions #317 / #318 的 406、409 两条）。
+
+- 分界：**要去读文件系统的按真实平台拼**，纯字符串的"惯例目录"（Homebrew / pyenv / snap）
+  仍按目标平台拼 —— 后者在 Windows 上跑 darwin 用例时反过来也需要 win32 的反斜杠。
+- 真 Windows 上 `join === win32.join`，行为一字不变；CI 从红转绿（#319）。
+
+### Fixed — yt-dlp 读用户的全局 config：`--embed-subs` 让第一次下载必挂，缓存又把失败盖住（#91）
+
+用户 `yt-dlp` 全局配置里一句 `--embed-subs`，在 C站 上就会去取"字幕"（实为 danmaku XML），
+ffmpeg 封不进 mp4 → 后处理阶段失败、退出码 1。而**视频其实已经合好了**，原样再调一次还成功（走缓存）。
+
+- **四处 yt-dlp 调用统一加 `--ignore-config`**（下载 + 两处 `-J` 探测 + 直链探测）：插件只认自己
+  传的参数，不继承用户机器上的偏好。
+- **退出码非 0 不再直接判死**：先把产物收拢出来，能 probe 出视频流就降级成"成功 + 一条 warning"
+  （清单里记 `downloadWarning`）；真 probe 不出来才抛原始错误。
+- 清掉旁路产物（`video.danmaku.xml` / `video.jpg` 等），免得下次判"哪个才是片子"时被带偏。
+- 缓存命中但缺 `meta.json` 时回写一份最小的；footer 的 `auth=undefined` 改成 `auth=unknown`。
+
+### Added — 清单头报「最大空档」：预算和覆盖是两笔账（#93）
+
+`plan:` 只报 token 不报"最长有多久没人看"，读的人（尤其是模型）会自动把"便宜"读成"够用"；
+而 `cell 1 = 00:00.00-00:12.08` 这种区间会被当成"这 12 秒我看过"，实际只有 `frame@00:04.31` 那一瞬。
+
+紧跟 `plan:` 新增一行：
+
+```text
+coverage: 9 frames over 108.7s · largest gap 12.1s at 00:48.3–01:00.4 (no frame inside that gap — it does not mean nothing happened there)
+```
+
+- 按**实际发出的帧**（`t_frame`）算，不按格子算 —— `frames-merged:29->9` 时格子间距会小于真实采样间距，
+  按格子算会系统性少报。
+- 两端也算：片头到第一帧、最后一帧到片尾。
+- 措辞刻意不含 `≤`：只报实际值，撞上限就照实写（与 #89 的 `longest` 同一口径）。
+- 行尾那句是**边界声明**：`largest gap` 只界定「有没有人看过」，不界定「有没有漏掉事件」——
+  0.3 秒的手可以藏在 1.2 秒的空档里，它不能替代切点密度。
+
+### Fixed — #92 带的 python 测试在 Windows 上红 4 条（跨平台隔离）
+
+`pythonInstallDirs()` 接受可注入的 `platform`，但拼路径用的是 `path.join`（永远跟真实平台走）——
+在 Windows 上跑 `platform:'darwin'` 的用例会拼出 `\Users\me\.pyenv\shims`。
+改成按目标平台选 `path.win32` / `path.posix`；另有一条测试没钉 `DSH_HOME`，读到开发机真实的
+`~/.dsh/asr.json`，凭空多一个候选。现在全平台都是绿的（610 tests / 608 pass / 2 skipped）。
+
+### Fixed — macOS 上装了 Homebrew Python 却报"没装"，设置页让你再下一遍
+
+从 Finder / 程序坞启动的 DSH 拿不到登录 shell 的 PATH（实测宿主进程里只有
+`/usr/bin:/bin:/usr/sbin:/sbin`），于是 `brew install python` 装好的 `/opt/homebrew/bin/python3`
+既不在 PATH 上、也没人去找它：
+
+- 设置页的 Python 那一行只试 `python` / `py` 两个名字 —— macOS 上 Homebrew 的命令叫 `python3`，
+  所以永远"未找到"，页面跟着给出 python.org 的下载按钮（用户：我明明装了）；
+- 跑 OCR 时的候选链只有 PATH 上的 `python3` / `python`，GUI 启动时解析到 `/usr/bin/python3`
+  （3.9.6，没有 rapidocr），字幕校正静默跳过。
+
+修法和 ffmpeg / yt-dlp 那两处一致 —— **"装在哪"和"能不能找到"解耦**：
+
+- 新增 `pythonInstallDirs()`：macOS 列 `/opt/homebrew/bin`、`/usr/local/bin`、`/opt/local/bin`、
+  python.org 的 framework 目录、`~/miniconda3`、`~/anaconda3`、pyenv / asdf 的 shims、`~/.local/bin`，
+  `/usr/bin` 兜底；Linux 列 `/usr/local/bin`、`/usr/bin`、`~/.local/bin`、conda、pyenv / asdf、`/snap/bin`；
+  Windows 扫 `%LOCALAPPDATA%\Programs\Python\Python3xx`（按**版本号**从新到旧，不是按字符串）以及
+  `C:\` / `%ProgramFiles%`。
+- `pythonCandidates()` 顺序：显式配置 → 环境变量 → `asr.json` → **常见安装目录（只收真实存在的文件）** →
+  PATH 上的名字。常见目录排在 PATH 前面：GUI 的 PATH 里那个 `python3` 恰恰是最不可能装了 rapidocr 的。
+- 设置页的 Python 行复用同一条候选链（`pythonStatus()`），显示 `3.12.4 · /opt/homebrew/bin/python3`；
+  Python 2 不算"装好了"（rapidocr 只支持 3.8+）。
+- 顺手修掉 `findPython()` 的调试开关读的是 `process.env` 而不是传入的 `env`；补上文件末尾
+  只有注释、没有实现的 `resetPythonCache()`。
+- 文档：README / `docs/INSTALL.zh.md` 的查找顺序补上常见目录并说明为什么必须扫目录；
+  设置页的 Python 帮助从"只有 Windows"改成三平台（`brew install python` / 发行版 `python3` / python.org）。
+
+测试：新增 `test/python-candidates.test.mjs` 9 条（目录清单、候选顺序、Windows 版本目录排序、`pythonStatus`）。
+全量 607 pass / 1 fail / 2 skipped —— 失败的是 `test/ytdlp-discovery.test.mjs:19`，**与本改动无关**：
+它假定"目录不存在就返回 null"，但 macOS 上 `findPipScript()` 还会扫真实的 `/opt/homebrew/bin`，
+机器上装了 yt-dlp 就会扫到（CI 是 ubuntu，所以一直是绿的）。
+
+## [0.7.5] - 2026-11-14
+
+### Added — CLI 补上 `probe`（`dsh-video-probe`）
+
+工具层的 5 个入口里，CLI 一直只有 `storyboard`（外加 scan / doctor / asr-check 三个辅助 bin）。
+`probe` 是**最便宜的一步**（本地几毫秒、链接只解析不下载），没有它，脚本化流程只能直接跳去
+全片扫描 —— 一次扫描 + 几张图的 vision token（实测一张 ≈222，索引另算）就白付了。
+
+- 新增 `bin/probe.mjs`，注册为 `dsh-video-probe`；逻辑直接调 `probeVideo()` / `probeUrl()`，
+  与工具层同一批函数（`src/tools/probe.js` 是薄壳，这里也是薄壳，不复制逻辑）。
+- `--json` 输出字段与工具层返回一致，方便和 `video_probe` 对拍；不认识的开关照样当场喊出来
+  （与 0.6 起的约定一致）。
+- 与 `storyboard --dry-run` 的分工：`--dry-run` 会跑全片扫描（拿切点密度定档位），
+  `probe` 连扫描都不做 —— 只想问"多长、有没有音轨、什么分辨率"时用这个。
+
+## [0.7.4] - 2026-11-11
+
+> 这一版只做一件事：**不拿真画面换省钱**。以前为了凑行高会把格子拉成 1.3:1 再 cover 裁掉
+> 溢出一维（16 帧混合档位序列实测 13 格被裁、左右各少 23%）；而画面**自带**的黑边反倒一直
+> 没裁，白付 token。现在反过来：一格都不裁真内容，黑边一律裁掉，画布比例跟着内容走。
+> 附带把竖屏画布的长边也对齐到 42px 计费行（9:16 每张少 5.2% token）。
+
+### Changed — **不再为了凑行高裁画面**；黑边改成真裁掉（#92）
+
+以前一格可以比画面宽/窄 30%（`DEFAULT_STRETCH`），靠 `cover` 把溢出那一维裁掉 —— 那是
+**拿真画面换张数**：实测一条 16 帧的混合档位序列，13 格被裁、最扁 1.3:1，即左右各少了 23%。
+现在规则反过来：
+
+- **格子比例必须等于画面比例**，一格都不裁。混合档位靠 `bounds()` 把相邻档缩/放到同一尺寸
+  来填满一行（1/2 和 1/3 正好在 1/3 会合），不再靠拉伸硬凑；
+- 拉伸机制没有删，但**必须由调用方给出"这里有多少黑边可以吃"的预算**（`pack.solve` 的
+  `crop.cropX/cropY`，默认 0）。没预算 = 不许裁。
+
+同时补上"该裁的没裁"那一半 —— **画面自带黑边现在真的会被裁掉**：
+
+```
+[probe] 1280×720 → 内容 404×720（左右各 34% 是黑的）
+以前：画布 798×443（16:9），每格里 68% 宽的横条是黑边，222 token 里约 150 token 买的是黑
+现在：画布 420×738（9:16），格子 = 内容，200 token 全是画面
+```
+
+- 检测：`probe.detectContentBox()`，抽 1/3、2/3 两处各看 0.6 秒 `cropdetect`，取**并集**
+  （宁可少裁不可多裁）+ 理智检查（面积 <20% 或宽/高 <20% 一律当检测失败）；
+- 取帧：`crop=w:h:x:y` 放在 `scale` 之前（批量、逐帧、`thumb` 三条路径都走）；
+- 画布比例跟着**内容**走；清单多一行 `trimmed=404x720 (bars cut, was 1280x720)`；
+- 远程 URL 不探（抓 URL 要带 UA/Referer，那里没有这套上下文），失败一律当"没有黑边"。
+
+副作用（如实记）：没有黑边的素材，混合档位不再能"拉伸凑一张"，可能多开一张图或
+少取几帧 —— 这是"不裁画面"的代价。已发布的行为对比：同一段"竖屏塞横屏"素材，
+以前 8 帧/1 张（每格只有 32% 是画面），现在 4 帧/1 张（每格 100% 是画面），
+和**原生竖屏素材**的处理完全一致。
+
+### Fixed — 竖屏画布的长边也要压在计费行上（#91）
+
+`fitCanvas` 的高度对齐闸门原来**写死 8px** —— 那个数是在 443px 高的横屏画布上标出来的（1.8%）。
+竖屏的长边是**高**，747px 时溢出 9px 就被判成"不值得压"，于是每张白付一整行：
+
+```
+420×747 + 页眉 18 = 765 → 19 行 → 211 token
+420×738 + 页眉 18 = 756 → 18 行 → 200 token   ← 格子区只矮 1.2%
+```
+
+- 闸门改成按高度取 1.8%：443px 上仍是 8px（**横屏一个数都不变**），747px 上给到 13px；
+- 9:16 素材每张 **211 → 200 token（-5.2%）**，面积代价 -1.2%；16:9 仍是 798×443 / 222。
+
+### Docs — 排布本身与画布比例无关，写清楚为什么（#91）
+
+同一档位序列在两种比例下 bins / 占用率 / 格数**完全一致**（64 秒 8 帧合成素材：
+16:9 → 798×443、1 张、97.4%；9:16 → 420×738、1 张、97.4%），因为 DP 在归一化方形里
+排方块、最后整体映射到画布，格子比例恒等于画布比例。顺带说明"m 列 × n 行排 9:16 格子
+只有 m=n 才不裁画面"，所以"行流式 + 方形格"是唯一不变的解，不是偷懒。
+
+## [0.7.3] - 2026-11-11
+
+> #89 的三条，共同点是**清单说了但没做到**。前两条是清单在说假话：
+> 写死 `≤30s each`（撞了帧数封顶其实有 39.6 秒的格子）、写死 `.evidence.json`
+> （插件路径根本不落盘，模型照着去 temp 翻）。第三条是短句重复的账算不过来。
+>
+> **发布后补记（#90）**：这个版本还带进了 `cbb74cd`（档位与积分按帧率归一，**默认开**），
+> 发布时漏写了。它不是文案修正，是判定口径变更 —— 非 30fps 素材的结果与 0.7.2 不可比，
+> 补在下面第一段。
+
+### Changed — 档位与积分按帧率归一（`timeNormalize`，默认开）（#90）
+
+原来的窗宽、平滑窗和七道阈值都是按 **30fps** 标定的（`0.0085 ≈ 3.3 秒一刀` 就是 30fps 下算的）。
+帧越密，单帧的切点概率越低，于是同一段画面 60fps 会被判成 2 档、30fps 是 4 档 ——
+"镜头越密格子越小"在高帧率素材上直接失效（游戏录屏、运动视频、手机高帧率拍摄都很常见）。
+
+- `INTEGRAL_FRAMES`(100) / `SMOOTH_FRAMES`(50) 两个窗宽乘 `fps / 30`，七道阈值除 `fps / 30`；
+- 积分采样点的阈值改用 `INTEGRAL_BASE_FPS`（**基准帧率 30**）而不是实际 fps：
+  逐帧分与 fps 成反比、Σscore 与 fps 无关，乘实际 fps 会让高帧率素材的采样点直接消失；
+- **30fps 逐位不变**；要回到旧口径：`~/.dsh/video.json` 写
+  `{"storyboard": {"timeNormalize": false}}`；
+- 用户能感知的主要是**积分采样帧数**（#90 实测，60 秒 60fps 连续运动素材：
+  15 帧 → 17 帧，积分点 8 → 16）与个别格子的档位。页数常因 `squeezeTiers`
+  按张数预算把档位整体加粗而看不出变化 —— 照 release 页预期"图会变少"会落空；
+- **非 30fps 素材的 0.7.3 与 0.7.2 结果不可比**，这是修正本身，不是回归。
+
+### Fixed — 撞上帧数封顶时，清单不再谎称 `≤30s each`（#89）
+
+`splitStaticShots()` 原来是「每次都切最长那一段的两半」，切到都 ≤ 30 秒**或**帧数到上限就停 ——
+后半句才是问题：撞上限时会留下超标的格子，而清单一直写 `≤${maxSec}s each`。
+
+- 切法改成**按需要等分**：一段 90 秒要 ≤30 秒就是 3 片，不是先 45/45 再各来一刀（4 片）。
+  同样达标，但少吃一个额度，cap 更不容易撞；
+- 真撞上了也不撒谎：清单改报**实际最长那一格**
+  （`longest 39s — 30s each does not fit inside 8 frames`），只有做到时才写 `≤30s each`。
+
+### Fixed — `evidence.json` 只在真写出来时才提（#89）
+
+清单末尾那句 `per-cell times for verification: <name>.evidence.json` 是写死的，但只有 CLI 的
+`saveStoryboards()` 会落盘；插件走附件服务，压根不写文件 —— 模型照着去找，翻遍 temp 也没有。
+现在只有 `result.evidencePath` 存在时才打，且**只报文件名**：本机绝对路径不该进模型上下文。
+
+### Fixed — 同一句台词只落在两格时，第二格给指针（#89）
+
+不是"按段去重"漏了：抽 legend 的成本是表头一行 + 每格一个 `→ L1`，一句 30 字重复两格净亏，
+所以以前两格各印一遍（用户看到的是同一句话占两遍 token）。现在 24 字以上的重复落指针
+`→ same as cell 4`；更短的句子指针比正文还长，仍然照印。
+
+### Fixed — 三份 README 的协议声明统一到 Apache-2.0（docs）
+
+v0.5.0 从 MIT 换到 Apache-2.0 时改了六处、漏了两处，于是同一份 `README.en.md` 里
+第 9 行写着"已改为 Apache-2.0"、第 494 行还写着 `MIT — see LICENSE`；`README.zh.md` 的
+许可段则整段照旧写 MIT。`LICENSE` / `NOTICE` / `package.json` / npm 元数据四处都是
+Apache-2.0，属于声明自相矛盾。
+
+- `README.en.md`、`README.zh.md`、`README.md` 的许可段统一为 **Apache-2.0**，并指向
+  `NOTICE` 与 `CREDITS.md`；`README.zh.md` 补上"v0.5.0 起由 MIT 变更"的交代；
+- 历史版本仍是 MIT 那句话保留，不删 —— 已发布的 MIT 版本不会因为这次改动变协议。
+
+### Fixed — 清单里给模型的"下一步"用了已删除的参数名（#89 同类）
+
+`formatManifest()` 报快剪爆发时提示 `video_zoom({ from, to, cells: 6, minGap: 0.4 })` ——
+`cells` 0.6.0 就删了、`minGap` 后来改名 `scanGap`。模型照着这句话调，两个参数都会被宿主
+按 schema 静默丢弃，然后奇怪"为什么没生效"。现在改成 `maxFrames: 6, scanGap: 0.4`，
+并在 `manifest.test.mjs` 里加了两条 `doesNotMatch`，以后再改参数名忘了改这句提示，测试先红。
+
+同一处的 `strategy` 提示还把旧名 `"saver"/"frugal"` 当现役名教给模型，改成 `compact`/`skim`。
+
+### Fixed — 测量口径漂移：一张图 384 token → 222（46 处）
+
+384 是 800² 时代的旧口径。现在默认画布是 **798×450**（宽度按 42 向下对齐，800×450 未对齐是 233），
+`rows×(cols+1)+2` = **222**。三份 README 里的 384 及其派生数字一起校正：
+
+| 场景 | 旧 | 新 |
+|---|---|---|
+| 单图 | 384 | **222** |
+| 2 张 | 768 | 444 |
+| 3 张 | 1152 | 666 |
+| 4 张 | 1536 | 888 |
+| 10 张 | 3840 | 2220 |
+| 18 张 | 6912 | 3996 |
+| 19 张 | 7296 | 4218 |
+| 24 张 | 9216 | 5328 |
+
+`npm run verify-tokens` 与宿主 23 组尺寸逐一对拍，数字以它为准。
+
+### Fixed — 英文版 README 还停在 0.5.x 的 API（doc）
+
+`README.en.md` 正文里留着 `video_storyboard({ input, cells: 16, sheets: 4 })` 这种**照抄就会失败**
+的示例，而文件开头自己写着 "the body of this file still reflects 0.5.x"、"examples below that still
+mention `cells` are 0.5.x" —— 用一句免责声明顶替了修改。
+
+- `cells` / `sheets` → `maxFrames` / `maxSheets`（表格 1 处 + 代码示例 3 行）；
+- `drops adaptive` / `adaptive gives …` → 实际的 `uniformTier: 'auto'`、`strategy: 'full'`；
+- `--badge 0.22` 整段重写：**这个开关不存在**，编号是 `badgeScale(w) = clamp(round(w/280), 3, 5)`
+  的 5×7 点阵，scale 2 会把 86 读成 88；
+- 开头那句"still reflects 0.5.x"删掉，换成"API 按 0.7 校正、实测数字来自 0.5–0.6"的如实说明。
+
+### Fixed — `minGap` 的校验是死代码
+
+`validateZoomArgs` 里还留着 `args.minGap` 的范围校验，但 schema 里只有 `scanGap` —— 宿主按 schema
+过滤参数，这个分支永远进不来。删掉；`scanGap` 自己的校验（0..30）在 `validateArgs` 里，覆盖更严。
+
+### Fixed — 测试夹具还在用 0.6 之前的策略名（test）
+
+`makeResult()` 里写 `strategy: 'balanced'`，而 `resolveStrategy()` 会把它换成 `standard` ——
+真实输出永远不会是 `balanced`。夹具改成 `standard`，断言同步。
+
+## [0.7.2] - 2026-11-10
+
+> 两个都是 #87 报出来的：**`maxFrames` 反而把帧数压少**（真 bug，装了这个参数就中招），
+> 以及 PPT / 单机位讲座这类零切点长片**一格 41 秒**（调阈值救不了，只能按时间兜底）。
+
+### Fixed — `maxFrames` 反而把帧数压少（#87，PR #88）
+
+`fillGaps()` 原来只在 `maxFrames` 不限时才跑，于是一刀长片：默认补到 4 帧，
+而 `maxFrames: 12` 反而只剩 2 帧。现在 `maxFrames` 只是**上限**，补位照跑、不越过上限；
+压张数那条路（`tidy()`）的同一个门也补上了。
+清单里"要了 N 格给了 M 格"那段不再把这种情况说成"窗口里只有这么多镜头"。
+
+### Added — 静态长镜头的密度按时间兜底（#87）
+
+PPT / 课件 / 单机位讲座全片可能只有 1 个切点，密度算不出来 → 一格 41 秒、中间翻过的页面全看不见。
+现在「窗口 ≥60 秒 + ≤1 个真切点 + 有段超过 30 秒」时按时间切开（每段 ≤30 秒，封顶 8 帧），
+并在清单里写一段 `density: static-longshot fallback …`，附两条改法（`video_zoom` / `from`+`segment`）。
+实测 164.5 秒零切点：4 格 × 41 秒 → **8 格 × 20.6 秒，张数不变**。
+
+## [0.7.1] - 2026-11-08
+
+> 这一版全是社区反馈的修复，没有新参数。三件事：**字幕抓取失败不再冒充「没配 ASR」**、
+> 设置页的 token 不再一重启就失效、`tierMap` 不再把 `NaN` 写进配置。
+
+### Fixed — 站点字幕抓取失败被静默降级成 `transcript="no-key"`（#86，PR #84 之后的实报）
+
+`no-key` 的含义是「**没尝试**转写」（没配 ASR）；而 `no-ytdlp` / `failed` 是「尝试了、但抓字幕
+这一步坏了」。两者以前在清单里长得一模一样，用户看到 `no-key` 就去配 ASR，实际该修的是 yt-dlp。
+
+- 新增 `transcript="subtitle-failed"`，带 `reason`（`no-ytdlp` / `failed`）和 `detail`；
+  只在「抓字幕自己坏了 + 没有内嵌字幕 + 又不会跑 ASR」时出现。`no-subs` 仍是 `no-key`
+  —— 那确实是「这条片子没有站点字幕」；
+- 清单里对应一段 `site subtitles FAILED (…)`，按 reason 给动作（装 yt-dlp / 读 detail 原文）；
+- 字幕 memo **只缓存成功和 `no-subs`**：`no-ytdlp` / `failed` / `needs-login` 不再缓存，
+  否则用户装好 yt-dlp 之后同一 URL 在本进程里永远不重试（「改了也没用」）；
+- 清单新增 `transcript-model="site-cc:ai-zh"` / `"embedded"`，站点 CC 和容器内嵌分得开。
+
+### Fixed — `tierMap` 接受非整数键值，把 `NaN` 写进 video.json（#83，PR #84）
+
+旧代码 `Math.round(Number(k))`：`foo` 变 `NaN`、`3.4` 悄悄四舍五入成 3。`NaN` 键写进去之后
+档位映射整段失效，而且没有任何提示。现在只收 1–8 的整数，非法值直接抛错、由设置页回显。
+
+### Fixed — 设置页 token 一重启就失效（PR #85）
+
+token 以前每次 `createSettingsPage()` 都新生成。宿主一重启，浏览器里已经打开的那个设置页
+就带着旧 token，保存全部报「token 无效」。现在落到 `$DSH_HOME/video-settings-token`
+（0600），跨进程稳定。
+
+### Added — 插件市场的本地化元数据与详情页（PR #85）
+
+`locale/{zh,en}.json` + `docs/plugin*.md`：详情页不再直接把 README 铺出来。
+`exports` 补 `./package.json` 与 `./locale/*.json`，`files` 加 `locale`。
+
+## [0.7.0] - 2026-11-07
+
+> 这一版只有一件「新功能」，其余全是补课：**七道阈值多了一套按人眼感知定标的表**；
+> 另外修了长片 720p 副本下完就被自己删掉的问题，以及 Windows 上子进程闪黑框。
+
+### Added — 第二套档位阈值 `tierCurve: 'perceptual'`（可选，默认不变）
+
+档位阈值原来只有一套 —— 照抄 docx 的七道「每帧切点概率」。这次把 see-now 0.2.0 里按
+**人眼瞬时记忆**重标的那套同步过来，做成可选项：
+
+| 曲线 | 七道阈值（每帧概率） | 一格代表 |
+|---|---|---|
+| `docx`（默认） | 0.0085 / 0.02 / 0.03 / 0.04 / 0.06 / 0.08 / 0.1 | 3.9 → 0.33 s |
+| `perceptual` | 0.0111 / 0.0163 / 0.0239 / 0.0351 / 0.0516 / 0.0757 / 0.1111 | 3.0 → 0.30 s |
+
+**单位换算是关键**：see-now 那边用「刀/秒」，这边用「每帧概率」，差一个 fps。
+新表 = see-now 的表 ÷ 30，和 docx 那套的换算关系完全一致（0.26/30 ≈ 0.0085、3.0/30 = 0.1）——
+形状没变，只是端点内收。
+
+两个端点有实验依据：**下界 3 s**（Pöppel 的「主观现在」2~3 s、电影镜头时长本身就有 ~3 s 的偏好）、
+**上界 0.3 s**（注意眨眼 200~500 ms、图标记忆的部分报告优势在 250~500 ms 内消失）。中间六道等比
+（公比 1.4678，时长辨别服从 Weber 律）。
+
+配置走 `~/.dsh/video.json` 的 `storyboard.tierCurve`，认不出来的名字一律退回 `docx`（不抛）。
+**默认仍是 `docx`** —— 这边没有做端到端 A/B（要真跑 SHOT/BBC 才知道），所以先只作为可选项。
+
+
+### Fixed — 长片的 720p 副本下完就被自己的清理逻辑删掉（#81）
+
+`pruneMedia()` 按 mtime 从旧到新删整个 `<key>/`，而刚下好的那个目录同时是"最旧的"
+也是"最新的"。缓存里只有它、且它本身超过上限时（实测 72 分钟的片 720p 副本 544 MB >
+300 MB），下载完成的下一行就把自己删掉，后面 `ffprobe/ffmpeg` 报 `No such file`。
+
+- `fetch.js` 把刚下载的目录作为 `exclude` 传进去；
+- `pruneMedia()` 没拿到 `exclude` 时也保"最新的那个"（`pipeline.js` 的
+  `pruneStorage()` 走这条，同样安全）；
+- 测试 +2：单目录超限不自删、exclude 的目录连统计都不算。
+
+### Changed — 子进程统一 `windowsHide`（#37）
+
+`spawn` 控制台程序在 Windows 上会新建一个黑框，看视频时每隔几秒闪一下。
+`audio.js` / `scan.js` / `sheet.js` / `subtitle-strip.js` / `ytdlp.js` 全部补上
+`windowsHide: true`（非 Windows 平台该键被忽略）。
+
+### Docs — 原理图解（合 PR #82）
+
+用一支 MV 把链路拆成 7 步，每步配真实中间图。图不在仓库里（`NOTICE` 不放第三方画面），
+文档外链引用。顺手修掉两处和源码对不上的说明：README 的"格子尺寸全都一样"（0.6 起按
+切点密度分档）、注释里的"假切点 +2 档"（常量是 `MARK_BOOST = 3`）。
+
+## [0.6.9] - 2026-11-06
+
+### Fixed — 有些机器上装完一个工具都不出现（社区实报）
+
+`import('@deepseek-ai/dsh-tools')` 拿 `defineTool`，而宿主的这份**被打进 `app.asar`**，
+插件从自己的 `node_modules` 往上解析不到 → 抛 → `apply()` 的 catch 吞掉 →
+**整个插件静默不注册任何工具**（日志里只留一行 `failed to load`）。
+
+- 新增 `src/define-tool.js`：内置一份 `defineTool` 兼容实现（author spec → JSON Schema，
+  规则照抄宿主 `runSchemaCompiler` 的语义；只少了运行时参数校验）。
+- `loadDefineTool()` 改成三跳：`import` → `DSH_TOOLS_PATH`（包了 try，路径写错也不会崩）→ 内置兜底。
+- 走兜底的情况下工具照常注册，`schema-audit` 那套静态审计仍然是第一道防线。
+- 测试 +6：`type:'json'` 退化成注解、`required:true` 提升到父级、真实 spec 全部能编译出来。
+
+### Added — 会话里的分镜图不再无限累积
+
+一张图进了会话历史就跟着每一轮请求走、宿主也不回收。现在涨到 `imageTrigger`（默认 300 张）
+就把更早的一次性省到 `imageKeep`（默认 100 张）：走宿主的 `image/offload`，
+那些图从此不进请求，磁盘上那份也能删（`tools/attachments-gc.mjs`）。
+两个数都能在设置页或 `~/.dsh/video.json` 里改，`0` = 关掉。
+
+**注意它们不是"一到就省"**：涨到触发线才动手，一次省到留底 —— 否则每出一张图都要改一次历史，
+前缀缓存每轮全废，比不省还贵。
+
+## [0.6.8] - 2026-11-06
+
+### Changed — 工具契约瘦身：长说明搬进 `video_help`
+
+五个工具的 description 和参数说明是**每一轮请求都要重发**的常驻文案。这次把"为什么 /
+多少 token / 实测数字"搬进新工具 `video_help`（零图片 token、不需要有片子），契约里只留
+"什么时候调、默认值是多少、价钱警告"。
+
+- 常驻 JSON（`defineTool` 编译出来的那份）11069 → 10527 字符，**已含新增的 `video_help`**；
+- 干跑印的说明书改成读 `src/storyboard/help.js` —— 以前这里另抄了一份，改档位只改一处就会
+  开始说不同的话；顺手补上它本来就缺的 tiers / tierMap 两节；
+- `tierMap` 不再声明 8 个子属性（两个工具省 ~480 字符）：键和值的 1..8 仍由 `validateToolArgs`
+  兜，报错反而更具体（会说哪个键错）；
+- 设置页「档位策略」下拉补上 `native`（原样）—— 它一直是「自定义」的底座，但之前选不到。
+
+### Fixed — CI 的 ffmpeg 安装不再一次超时整步失败
+
+2026-11-05 那次 node20 的 job 在 `apt-get install ffmpeg` 上下 62.8MB 包超时，整步
+`exit 124`，同一份代码的 node22 是绿的。现在改成**短超时多次重试**（apt 会复用已下好的
+`.deb`），job 预算从 12 分钟提到 15 分钟。
+
+### Added — 档位策略与逐档映射进设置页
+
+`video.json` 的 `storyboard` 段多了两项，设置页「视频与浏览器」里能改：
+
+- **档位策略**：不指定（默认，自动选档）/ 全尺寸 / 标准 / 紧凑 / 速览 / 一图 / **自定义**；
+- **逐档映射**：选「自定义」才展开，八行"算出来的 i 档 → 落到哪一档"。
+
+三层优先序和 `cutFloor` 一致：**本次调用显式传的 > `video.json` 里的 > 内核默认**。
+所以设置页设的是默认值，某一次调用显式传 `strategy` 仍然优先。
+
+几个实现上的取舍：
+
+- 新增 `native` 策略（bump 0、无 floor）。它只给「自定义」当底座 ——
+  映射表接在策略**之后**，底座必须是"按密度原样"，否则用户设的 `1→3` 是在一个
+  已经被 bump 过的档位上再挪。`standard` 不能用：它把 1 档压成 1/2。
+- 恒等项（`3: 3`）**不写进文件**。写了没用，只会让下次打开看不懂上次改了什么。
+- 空值（`strategy: ''` / `tierMap: {}`）是**真的删掉那一项**，不留空壳。
+- 越界档位直接报错（400），不默默吞掉 —— 用户以为设上了、结果没生效最难查。
+- 自定义下面有「一键填满」：八项一起改成同一个档。**这就是"每帧固定多大"的做法** ——
+  整表吃掉切点密度算出来的档位，`cutFloor` 怎么调都不影响尺寸。没做成独立的"锁定"选项：
+  它在数学上和全映射到同一档逐字节相同，多一个概念只会让人以为还有别的东西。
+
+## [0.6.7] - 2026-11-04
+
+### Fixed
+
+- **auto 在"大格子多"的片子上会开出一帧一张图**。BBC《Mountains》49 分钟、316 刀，
+  其中 305 帧是 1 档（一帧占满整张画布），不封顶要 **344 张图 ≈ 8 万 token**。
+  旧逻辑遇到"压进预算就认不出镜头"时会退回不封顶，于是把 344 张原样交出去。
+  现在超过 `max(64, 8×时长预算)` 就认定为失控，强制兑现压到 4× 预算的那一版
+  （同片 39 张、114×74 的格子），并在清单里写明 `uncapped … 344 images … capped to 39`。
+  阈值收在 `tiers.shouldForceSheetCap()`（纯函数，带单测）；正常片子（5 分钟 PV 要
+  60 张那种）不受影响。
+
+- **`ffmpeg` 明明在、却报"不存在"**：`binaries.js` 用 `existsSync`，把权限错误一起吞成 `false`，
+  沙箱里文件就在那儿也报 not found。改用 `statSync` 保留 errno，报错区分 `ENOENT` / `EACCES`，
+  候选里补上会话工作区的 `tools/ffmpeg/bin`（#76）。
+  顺手把 ASR 免费路线的说法统一了：`INSTALL.zh.md` 第 3 步写清两条路（sherpa-onnx 体积小、
+  FunASR 生态成熟）和 cookie 读 CC 字幕的完整步骤（#77），设置页依赖区也给免费路线入口，
+  不再只显示"未配置"。
+
+- **dry-run 在"失控被压过"时仍推荐 `full`**：344 张被护栏压到 39 张之后，dry-run 还按
+  "最省的可读档"推荐 full —— 用户照着调一次又回到 344 张。现在只要发生过 `overBudget`
+  就推荐 `auto`，并在推荐行里写明"别传 full，那就是不封顶的那一版"。
+
+- **清单把"没有台词"说清楚**：交付文案前置「画面正常，只是没有台词」，
+  cookie 落到 `video.json`，不再让人以为整次提取失败了（#77）。
+
+## [0.6.6] - 2026-11-04
+
+### Added
+
+- **`cutFloor` 参数**（`video_storyboard` / `video_zoom`）：切点判定下限，0–255，不传沿用口径默认
+  （mc: 80 / abs: 12）。这是"这段素材该怎么切"的入口——80 适合纪录片/电影（长镜头、剪辑稀疏），
+  60 适合短视频/快剪（中位镜头 < 3 秒）。
+  实测 SHOT 27 段：60 比 80 召回 **+10 个点**、刀数 +13%；BBC 11 集反过来，60 比 80 掉 3.2 个点。
+  **没有一个常数能两头讨好**，所以交给调用方按素材类型选，而不是继续在算法里猜
+  （按分数分位数、按高分帧占比两个自适应判据都实测无效）。
+  `cutFloor` 已进 `cacheKey` —— 漏了就会出现"改了参数却拿到上一次结果的缓存"，`minGap` 踩过同一个坑。
+
+- **逐格部分拉伸**。同一行里宽度不等的格子，每格拉高到 `min(行高, s×(1+τ))`，拉不满的部分
+  才留空。以前只有"整行拉平 / 整行不拉"两档，宽度比超过 (1+τ)² 的行一点空隙都收不回来 ——
+  混合档位里那种行才是空隙的大头。纯后处理，不改行划分和箱数，fill +1.8pt。
+- 三条排布测试（`test/pack.test.mjs`）。**做变异测试时发现的**：把上面三处逐个改回旧行为，
+  原 517 条测试一条都不红。补完再验，三个改坏各红一条。
+
+### Changed
+
+- **切点链路的编排收口到新文件 `src/storyboard/cuts.js`**。原先 5 个阶段平铺在 `runStoryboard` 里，
+  每步都读 `cuts.length` 做准入判断，顺序是隐式的：
+  极静素材补刀（`perSec < 0.1`）→ 爆点细扫（`fine > coarse`）→ 丐中丐合并（`+1 > 56`）→ 打标签。
+  现在阶段表写在文件头，并明确"新增加刀/删刀的阶段只能排在 3 之后、4 之前"。
+  `shouldTakeSpikes` 一起搬过去，`pipeline.js` 原路径 re-export，外部 import 不变。
+  **行为零改变**：6 段真实素材重构前后 cuts 逐刀一致（含 type 标签）。
+
+- **画布宽高都对齐到 42px 计费格，高度把页眉也算进去**。
+  宽度：800×450 会被算成 812（20 列），798 只要 19 列，每行少 1 个分隔 token。
+  高度：出图时顶上要叠一条 19px 的时间抬头，449+19 = 468 正好越过 462（11 行的上界），
+  白多一整行 —— 所以把格子区压到 443，总高 462。
+  **实际出图 800×469 = 254 → 798×462 = 222（-12.6%）**，格子区面积少 1.5%。
+  两条对齐都只在"真降价"时生效（地板区原样返回），页眉高度的公式收口到 `tiers.headerHeight`
+  —— 以前 `fitCanvas` 看不到它，只对齐格子区，等于把页眉的成本漏算了。
+- **`DEFAULT_STRETCH` 0.2 → 0.3**。一行里最宽的格压到 1/1.3、最窄格拉到 1.3，更多行能
+  "拉平填满"。150 组混合档位（5025 帧）实测：张数 578 → 550（-4.7%），fill 81.2% → 88.8%。
+  配合画布对齐，**同素材总 token -9.3%**。
+- `pipeline.js` 里散着的 8 处 `stretch: 0.2` 收敛成一个 `PACK_STRETCH`。
+
+### Fixed
+
+- **`flat` 的可行性判据比它自己宣称的松**。原来写 `(1+τ)/(1−τ)`，τ=0.3 时最窄格实际会被
+  拉到 1.43（+43%），而文档说的是"最多 30%"。改成 `(1+τ)²`。400 组随机档位压测（1362 张图）
+  量到旧判据的最大宽高比偏差 33.6%，改完理论值正好 30%。
+
+## [0.6.5] - 2026-11-03
+
+> 主题：**三个社区报的坑，加一条从来没通过的路**。`toRects` 最后一行会越界 1px、
+> 媒体目录换到别的盘后空间检查还盯着 C 盘、以及 `~/.dsh/video.json` 里写 `mediaDir`
+> 从来没生效过 —— 桌面版读不到 `setx` 设的环境变量，所谓"换盘"其实是个死开关。
+
+### Added
+
+- **设置页补 `cookies` 与 `storyboard.auto`**（@ggfgfgf-on，PR #73）。cookies 只写路径、
+  不读文件内容；`storyboard.auto` 关掉只影响自动生成分镜，显式调用工具照常。
+  对应环境变量存在时，页面明说"环境变量优先"。
+- **设置页改自动保存**（同 PR）。600ms debounce、保存串行化（不会两次并发写）、
+  首渲染不触发、密钥框走 `onBlur` 而不是逐字存；端口不在 1-65535 就不落盘。
+- **`mediaDir` / `cacheDir` / `mediaMaxBytes` 改读 `~/.dsh/video.json`**，优先序
+  `env > video.json > 默认`。桌面版读不到 `setx` 环境变量，配置只能走 json ——
+  补上之后"把媒体目录换到 D 盘"才真的能换。新增 `user-config.js`：只读路径类字段，
+  坏文件/非对象按空配置处理，核心不因为一个配置文件坏了就拒绝干活。
+
+### Fixed
+
+- **`toRects()` 最后一行可能越过画布 1px**（#71，@ggfgfgf-on，PR #72）。行高/水平取整
+  修正后统一把矩形钳回画布、保留至少 1px 宽高；水平修正处补 `Math.max(1, ...)`，
+  避免宽度变 0 或负数。**3000 组随机档位 × 画布 × gutter 双跑：越界 802 例 / 4691 px → 0，
+  而原本不越界的 2198 例输出逐字节一致**（没有误伤），相邻格重叠数与修前完全相同。
+- **媒体目录换到别的盘后，下载前的空间检查仍看系统临时盘**（#74，@ggfgfgf-on，PR #75）。
+  `freeBytes(dir)` 改为按目标目录所在卷 `statfs`，目录还没建时沿父目录找最近的已存在祖先。
+  实测本机 C: 13.8G / D: 98.2G：`freeBytes('D:/videos')` → 98.2G、
+  `freeBytes('D:/videos/不存在的/x')` → 98.2G（退到已存在祖先，没掉回 C:）。
+- **空环境变量提示不占位**（PR #73）：`DSH_*` 设成空串时不再显示成"环境变量优先"。
+
+### 说明
+
+- 设置页**没有**加 `cacheDir` / `mediaDir` / `mediaMaxMb` 的输入框。路径填错（不存在的盘、
+  没权限的目录）最后表现成"下载失败"或"缓存不知道跑哪去了"，用户读不出因果。核心层已经
+  能读 json，能手改配置的人现在就能用；等想清楚怎么提示再加 UI。
 
 ## [0.6.4] - 2026-11-02
 

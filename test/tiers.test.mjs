@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_STRATEGY, LEVEL_THRESHOLDS, MARK_BOOST, STRATEGIES, TIER_MAX, TIER_MIN,
-  applyMarkBoost, applyStrategy, applyTierMap, autoSheetCap,
-  IMAGE_UPSCALE_AREA, INTEGRAL_REF_SCORE, MAX_CANVAS_SIDE, fitCanvas, framesFromBounds, imageTokens, integralMarks, levelAt,
+  applyMarkBoost, applyStrategy, applyTierMap, autoSheetCap, shouldForceSheetCap,
+  IMAGE_UPSCALE_AREA, INTEGRAL_REF_SCORE, MAX_CANVAS_SIDE, fitCanvas, framesFromBounds, headerHeight, imageTokens, integralMarks, levelAt,
   levelCurve,
   pickAutoStrategy,
   readabilityOf,
@@ -123,9 +123,13 @@ test('integralMarks: 完全静止的片子一个点都不补', () => {
 
 test('integralMarks: 参考强度画面 → 大约每 equivSeconds 一个点', () => {
   // score 取 INTEGRAL_REF_SCORE 才是"中等强度画面"，此时间隔才该等于 equivSeconds。
-  // 阈值 = REF × fps × equivSeconds，攒够要 REF×fps×eq / (REF×fps) = eq 秒。
-  const series = Array.from({ length: 100 }, (_, i) => ({ t: i * 0.1, score: INTEGRAL_REF_SCORE }));
-  const marks = integralMarks({ duration: 10, series, equivSeconds: 5 });
+  //
+  // ⚠️ 构造必须是 **30fps**：`INTEGRAL_REF_SCORE` 就是按 30fps 素材标定的（见
+  // `INTEGRAL_BASE_FPS` 的注释），阈值为 `REF × 30 × eq`。真实素材的逐帧分与帧率
+  // 成反比（8fps 每帧 16 分、30fps 只有 4 分），所以"每帧恒 4 分"只在 30fps 下
+  // 代表中等强度画面；用 10fps + 每帧 4 分是虚构的低帧率低强度素材，攒不够是对的。
+  const series = Array.from({ length: 300 }, (_, i) => ({ t: i / 30, score: INTEGRAL_REF_SCORE }));
+  const marks = integralMarks({ duration: 10, series, equivSeconds: 5, fps: 30 });
   assert.ok(marks.length >= 1 && marks.length <= 3, `实得 ${marks.length}: ${marks}`);
   for (let i = 1; i < marks.length; i += 1) assert.ok(marks[i] > marks[i - 1]);
   if (marks.length >= 2) {
@@ -137,9 +141,10 @@ test('integralMarks: 参考强度画面 → 大约每 equivSeconds 一个点', (
 test('integralMarks: 阈值是**绝对值** —— 画面整体越快，点越多', () => {
   // 这是那条被修掉的病：以前阈值 = 全片平均变化量 × equivSeconds，阈值跟着画面一起涨，
   // 两者抵消 → 不管多快都是 equivSeconds 秒一个点（实测 2/s 到 64/s 全是 19 个）。
+  // 同上：30fps 构造（`INTEGRAL_REF_SCORE` 的标定帧率）
   const at = (score) => {
-    const series = Array.from({ length: 1200 }, (_, i) => ({ t: i / 12, score }));
-    return integralMarks({ duration: 100, series, equivSeconds: 6, fps: 12 }).length;
+    const series = Array.from({ length: 3000 }, (_, i) => ({ t: i / 30, score }));
+    return integralMarks({ duration: 100, series, equivSeconds: 6, fps: 30 }).length;
   };
   const slow = at(1);
   const ref = at(INTEGRAL_REF_SCORE);
@@ -159,7 +164,7 @@ test('integralMarks: 真切点附近不补点（那里已经是边界）', () =>
 
 /* ---------------------------------------------------------------- 策略 / 几何 */
 
-test('applyStrategy: 五个档位的映射（旧名仍然认）', () => {
+test('applyStrategy: 六个档位的映射（旧名仍然认）', () => {
   const base = [1, 2, 3, 8];
   assert.deepEqual(applyStrategy(base, 'full'), [1, 1, 2, 7], '全尺寸：升一档，1 仍是 1');
   assert.deepEqual(applyStrategy(base, 'standard'), [2, 2, 3, 8], '标准：1 档压成 1/2');
@@ -176,7 +181,10 @@ test('applyStrategy: 五个档位的映射（旧名仍然认）', () => {
   assert.deepEqual(applyStrategy(base, 'thrifty'), applyStrategy(base, 'skim'));
   assert.deepEqual(applyStrategy(base, 'ultra'), applyStrategy(base, 'brief'));
   assert.deepEqual(applyStrategy(base, 'nope'), applyStrategy(base, DEFAULT_STRATEGY), '未知策略退回默认');
-  assert.equal(Object.keys(STRATEGIES).length, 5);
+  // 0.6.7 起多一个 `native`：**只给「逐档自定义」当底座**（bump 0、无 floor）。
+  // 没有它的话，用户设的 tierMap `1→3` 是在一个已经被策略 bump 过的档位上再挪。
+  // 数量这条断言是防误加/误删的 —— 策略名会进工具 schema，每多一个都要占 token。
+  assert.equal(Object.keys(STRATEGIES).length, 6);
   assert.equal(DEFAULT_STRATEGY, 'compact', '默认是紧凑档（性价比最高）');
 });
 
@@ -323,16 +331,95 @@ test('imageTokens: 地板区间内"把图画大"几乎不要钱（这是地板�
 
 test('fitCanvas: 预算低于 544² 地板时抬到地板（画小不省钱，只会更糊）', () => {
   const small = fitCanvas(16 / 9, { budget: 120_000 });
-  // 圆整会少几十像素（725×408 = 295,800，比 544² 差 0.05%），但计费落在同一档
-  assert.ok(small.width * small.height >= IMAGE_UPSCALE_AREA * 0.999, '不能明显小于地板面积');
-  assert.equal(imageTokens(small.width, small.height), 192, '实际按地板档收费');
-  assert.deepEqual([small.width, small.height], [725, 408], '16:9 的地板画布');
+  const sh = headerHeight(small.width);
+  // 出图 = 格子区 + 页眉。725×402 的格子区 + 18px 页眉 = 725×420，10 行，仍在地板档（192）
+  assert.ok(small.width * (small.height + sh) >= IMAGE_UPSCALE_AREA, '含页眉的面积不能小于地板');
+  assert.equal(imageTokens(small.width, small.height + sh), 192, '实际按地板档收费');
+  assert.deepEqual([small.width, small.height], [725, 402], '16:9 的地板画布（高度压到含页眉整行）');
   // 和"直接给地板"必须一模一样，否则说明两条路径算得不一样
   assert.deepEqual(fitCanvas(16 / 9, { budget: IMAGE_UPSCALE_AREA }), small);
-  // 默认预算在地板之上，原样返回
+  // 默认预算在地板之上，原样返回 —— 但宽度向下对齐到 42px 的计费格。
+  // 800 对齐到 patch 网格后是 812（20 列），798 只要 19 列，每行省 1 个分隔 token：
+  // 11×(20+1)+2 = 233 → 11×(19+1)+2 = 222，面积只少 0.25%。
   const def = fitCanvas(16 / 9);
-  assert.deepEqual([def.width, def.height], [800, 450]);
+  const dh = headerHeight(def.width);
+  assert.deepEqual([def.width, def.height], [798, 443]);
+  assert.equal(def.width % 42, 0, '宽度必须落在计费格整数倍上');
+  // **出图高度要算上页眉**：798×462 = 11 行 = 222；不压的话 798×468 是 12 行 = 242。
+  // 压掉的 6px 只占格子区 1.3%，换一整行 token 回来。
+  assert.equal(imageTokens(def.width, def.height + dh), 222, '含页眉的总高不能跨行');
+  assert.ok(def.height + dh <= 42 * 11, '总高不超过 11 行的上界');
   // 上限仍然生效
   const big = fitCanvas(16 / 9, { budget: 99_999_999 });
   assert.ok(Math.max(big.width, big.height) <= MAX_CANVAS_SIDE);
+});
+
+test('fitCanvas: 竖屏的长边（高）也要落在计费行上（#91）', () => {
+  // 横屏是**宽**在长边上、已经对齐 42；竖屏是**高**在长边上。
+  // 以前高度那道闸写死 8px（443px 上标出来的），747px 的竖屏溢出 9px 就放弃压缩，
+  // 于是每张白付一行：420×765=211 vs 420×756=200。
+  const p = fitCanvas(9 / 16);
+  const ph = headerHeight(p.width);
+  assert.equal(p.width % 42, 0, '宽仍然落在计费格上');
+  assert.equal((p.height + ph) % 42, 0, '竖屏的总高（含页眉）必须正好压在行边界上');
+  assert.equal(imageTokens(p.width, p.height + ph), 200, '9:16 不能白付一行');
+  // 代价只能是"矮 1.2%"，不能为对齐多丢面积（420×747 是修之前的解）
+  assert.ok(p.width * p.height >= 420 * 747 * 0.98,
+    `面积掉太多：${p.width}×${p.height}`);
+});
+
+test('fitCanvas: 横屏结果不受 #91 影响（相对闸门在 443px 上仍等于 8px）', () => {
+  const d = fitCanvas(16 / 9);
+  const dh = headerHeight(d.width);
+  assert.deepEqual([d.width, d.height], [798, 443]);
+  assert.equal(imageTokens(d.width, d.height + dh), 222);
+});
+
+test('shouldForceSheetCap: 344 张算失控，60 张不算', () => {
+  assert.equal(shouldForceSheetCap(344, 12), true, '49 分钟纪录片不封顶 344 张 → 必须压');
+  assert.equal(shouldForceSheetCap(100, 12), true, '超过 max(64, 8x12)=96');
+  assert.equal(shouldForceSheetCap(60, 12), false, '5 分钟 PV 要 60 张是真实的镜头数，不算失控');
+  assert.equal(shouldForceSheetCap(44, 12), false);
+  assert.equal(shouldForceSheetCap(0, 12), false);
+  assert.equal(shouldForceSheetCap(344, 0), false, '没有预算就不判');
+  assert.equal(shouldForceSheetCap(NaN, 12), false);
+});
+
+// ── 第二套阈值：perceptual（从 see-now 0.2.0 同步过来的）───────────────────────
+
+test('perceptual 表：7 道、严格递增、端点是 3 s / 0.3 s（每帧概率口径）', async () => {
+  const { PERCEPTUAL_THRESHOLDS, LEVEL_THRESHOLDS } = await import('../src/storyboard/tiers.js');
+  assert.equal(PERCEPTUAL_THRESHOLDS.length, 7);
+  for (let i = 1; i < 7; i += 1) {
+    assert.ok(PERCEPTUAL_THRESHOLDS[i] > PERCEPTUAL_THRESHOLDS[i - 1],
+      `第 ${i + 1} 道没递增：${PERCEPTUAL_THRESHOLDS[i - 1]} → ${PERCEPTUAL_THRESHOLDS[i]}`);
+  }
+  // 端点：一格最多 3 s、最少 0.3 s → 每帧概率 = 1/(30×秒)
+  assert.ok(Math.abs(PERCEPTUAL_THRESHOLDS[0] - 1 / (30 * 3)) < 0.0005, '下界应是 3 秒');
+  assert.ok(Math.abs(PERCEPTUAL_THRESHOLDS[6] - 1 / (30 * 0.3)) < 0.0005, '上界应是 0.3 秒');
+  // 和 docx 的换算关系必须一致：两边都除以 30 得到同一族的数
+  assert.ok(Math.abs(LEVEL_THRESHOLDS[6] - 3.0 / 30) < 0.0007, 'docx 上界换算对不上');
+});
+
+test('thresholdsFor：认名字，认不出来退回 docx（配置写错不该让分镜失败）', async () => {
+  const { thresholdsFor, LEVEL_THRESHOLDS, PERCEPTUAL_THRESHOLDS } = await import('../src/storyboard/tiers.js');
+  assert.deepEqual(thresholdsFor('docx'), LEVEL_THRESHOLDS);
+  assert.deepEqual(thresholdsFor('perceptual'), PERCEPTUAL_THRESHOLDS);
+  assert.deepEqual(thresholdsFor(undefined), LEVEL_THRESHOLDS);
+  assert.deepEqual(thresholdsFor('perceptua1'), LEVEL_THRESHOLDS);
+  assert.deepEqual(thresholdsFor('  perceptual  '), PERCEPTUAL_THRESHOLDS, '两边空格要能容错');
+});
+
+test('同一批切点换表：perceptual 只会把档位抬高或不变，不会反着降', async () => {
+  const { levelCurve, LEVEL_THRESHOLDS, PERCEPTUAL_THRESHOLDS } = await import('../src/storyboard/tiers.js');
+  // 每 0.6 秒一刀（1.67 刀/秒），60 秒
+  const cuts = Array.from({ length: 100 }, (_, i) => i * 0.6);
+  const a = levelCurve({ duration: 60, fps: 30, cuts, thresholds: LEVEL_THRESHOLDS });
+  const b = levelCurve({ duration: 60, fps: 30, cuts, thresholds: PERCEPTUAL_THRESHOLDS });
+  let higher = 0;
+  for (let i = 0; i < a.levels.length; i += 1) {
+    assert.ok(b.levels[i] >= a.levels[i], `第 ${i} 帧反而降了：${a.levels[i]} → ${b.levels[i]}`);
+    if (b.levels[i] > a.levels[i]) higher += 1;
+  }
+  assert.ok(higher > a.levels.length * 0.3, `perceptual 应该明显更早升档，实际只有 ${higher} 帧变了`);
 });

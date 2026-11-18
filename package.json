@@ -1,7 +1,7 @@
 {
   "name": "video-storyboard-skill",
-  "version": "1.1.0",
-  "description": "Agent Skill: turn a video into storyboard images you can cite — one frame per shot, cell size follows cut density (1/1 … 1/8), row-packed into as few images as possible, with a timestamped index and a text locator.",
+  "version": "1.2.0",
+  "description": "Agent Skill: turn a video into storyboard images you can cite — one frame per shot, cell size follows cut density (1/1 … 1/8), row-packed into as few images as possible, with a timestamped index the model can quote and a tier map it can override.",
   "keywords": [
     "agent-skill",
     "skill",
@@ -24,6 +24,40 @@
     "url": "git+https://github.com/Ariakage/video-storyboard.git"
   },
   "author": "SAOS-3624",
+  "contributors": [
+    {
+      "name": "ggfgfgf-on",
+      "url": "https://github.com/ggfgfgf-on"
+    },
+    {
+      "name": "dugu951",
+      "url": "https://github.com/dugu951"
+    },
+    {
+      "name": "canyueY",
+      "url": "https://github.com/canyueY"
+    },
+    {
+      "name": "xingyueDanYang",
+      "url": "https://github.com/xingyueDanYang"
+    },
+    {
+      "name": "aizhimoran",
+      "url": "https://github.com/aizhimoran"
+    },
+    {
+      "name": "MULINXF",
+      "url": "https://github.com/MULINXF"
+    },
+    {
+      "name": "viwe-monai",
+      "url": "https://github.com/viwe-monai"
+    },
+    {
+      "name": "opcXopc",
+      "url": "https://github.com/opcXopc"
+    }
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "main": "./src/storyboard/index.js",
@@ -48,17 +82,18 @@
     "./python": "./src/storyboard/python.js",
     "./browser-time": "./src/storyboard/browser-time.js",
     "./transcript-pass": "./src/storyboard/transcript-pass.js",
-    "./config": "./src/storyboard/config.js"
+    "./config": "./src/storyboard/config.js",
+    "./package.json": "./package.json"
   },
   "bin": {
-    "video-storyboard": "./bin/storyboard.mjs",
-    "video-probe": "./bin/probe.mjs",
-    "video-zoom": "./bin/zoom.mjs",
-    "video-locate": "./bin/locate.mjs",
-    "video-subtitles": "./bin/subtitles.mjs",
-    "video-doctor": "./bin/doctor.mjs",
-    "video-scan": "./bin/scan-video.mjs",
-    "video-asr-check": "./bin/asr-check.mjs"
+    "video-storyboard": "bin/storyboard.mjs",
+    "video-probe": "bin/probe.mjs",
+    "video-zoom": "bin/zoom.mjs",
+    "video-locate": "bin/locate.mjs",
+    "video-subtitles": "bin/subtitles.mjs",
+    "video-doctor": "bin/doctor.mjs",
+    "video-scan": "bin/scan-video.mjs",
+    "video-asr-check": "bin/asr-check.mjs"
   },
   "files": [
     "SKILL.md",
